@@ -89,6 +89,13 @@ Docker allows you to run the experiments in a consistent, containerized environm
 ### Option C: HPC Job Submission (Slurm)
 If you are using the **AAU AI-LAB HPC**, use the provided Slurm scripts in the `sh/` directory.
 
+Before submitting, export your W&B credentials so they are picked up by the compute nodes:
+```bash
+export WANDB_API_KEY=your_api_key_here
+export WANDB_ENTITY=your_team_name
+export WANDB_PROJECT=gnn-experiments
+```
+
 - **Submit a Specific Model Job**:
   ```bash
   sbatch sh/run_gcn.sh
