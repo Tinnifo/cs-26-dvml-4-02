@@ -1,58 +1,114 @@
-# GNN Benchmarking on Planetoid Datasets (AAU AI-LAB HPC)
+# GNN Benchmarking on Planetoid Datasets
 
-This project benchmarks various Graph Neural Network (GNN) models on Planetoid datasets (Cora, CiteSeer), optimized for the **AAU AI-LAB HPC** environment with integrated **Weights & Biases (W&B)** logging.
+This project benchmarks various Graph Neural Network (GNN) models on Planetoid datasets (Cora, CiteSeer, PubMed), with integrated **Weights & Biases (W&B)** logging for experiment tracking.
+
+## 1. Prerequisites
+Ensure you have the following installed:
+- **Python 3.10** or newer.
+- **pip** (Python package installer).
+- **Docker** (optional, for containerized execution).
+
+## 2. Local Environment Setup
+
+Follow these steps to set up your local development environment from scratch:
+
+### Step 2.1: Create a Virtual Environment
+A virtual environment keeps the project's dependencies isolated.
+```bash
+# Create the environment (using .venv as the name)
+python3 -m venv .venv
+```
+
+### Step 2.2: Activate the Virtual Environment
+- **Linux / macOS**:
+  ```bash
+  source .venv/bin/activate
+  ```
+- **Windows**:
+  ```bash
+  .venv\Scripts\activate
+  ```
+
+### Step 2.3: Install Dependencies
+Install all required libraries, including PyTorch, PyTorch Geometric, and W&B:
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## 3. Weights & Biases (W&B) Configuration
+
+Weights & Biases is used for real-time tracking, logging metrics, and visualizing results.
+
+### Step 3.1: Login to W&B
+If you don't have an account, sign up at [wandb.ai](https://wandb.ai). Then, log in via the terminal:
+```bash
+wandb login
+```
+
+### Step 3.2: Configure W&B Entity (Optional)
+To log to a specific W&B team or username (entity), set the following environment variable:
+```bash
+export WANDB_ENTITY=your-team-name
+```
+Alternatively, you can pass this via command-line arguments (see below).
+
+---
+
+## 4. Running Experiments
+
+### Option A: Local Execution
+You can run a single model or a full suite of experiments directly from your terminal.
+
+- **Train a Single Model (e.g., GCN on Cora)**:
+  ```bash
+  python src/train.py --model GCN --dataset Cora --use_wandb
+  ```
+- **Run the Full Suite (All models, datasets, and budgets)**:
+  ```bash
+  python src/run_experiments.py --use_wandb
+  ```
+
+### Option B: Using Docker
+Docker allows you to run the experiments in a consistent, containerized environment.
+
+1. **Build the Docker Image**:
+   ```bash
+   docker build -t gnn-benchmark .
+   ```
+2. **Run the Container**:
+   To enable W&B logging inside the container, pass your **WANDB_API_KEY** and any other configuration (like `WANDB_ENTITY` or `WANDB_PROJECT`):
+   ```bash
+   docker run -e WANDB_API_KEY=your_api_key_here \
+              -e WANDB_ENTITY=your_entity_name \
+              gnn-benchmark
+   ```
+   *Note: Get your API key from [wandb.ai/settings](https://wandb.ai/settings).*
+
+### Option C: HPC Job Submission (Slurm)
+If you are using the **AAU AI-LAB HPC**, use the provided Slurm scripts in the `sh/` directory.
+
+- **Submit a Specific Model Job**:
+  ```bash
+  sbatch sh/run_gcn.sh
+  ```
+- **Submit the Entire Experimental Matrix**:
+  ```bash
+  sbatch sh/run_combined.sh
+  ```
+
+---
+
+## 5. Monitoring and Logs
+
+- **W&B Dashboard**: Visit your project on [wandb.ai](https://wandb.ai) to see live training curves (Loss, Accuracy, F1-score) and compare different runs.
+- **Local Logs**: If using Slurm, check the `logs/` folder for `.out` files.
+- **Interactive Check**: Use `squeue --me` (for Slurm) to check the status of your submitted jobs.
 
 ## Project Structure
-
-- **`src/`**: Core implementation files.
-  - `train.py`: Primary script for training a single model with configurable parameters and W&B logging.
-  - `run_experiments.py`: Script to run a comprehensive suite of experiments across multiple models, datasets, and label budgets.
-  - `GCN.py`, `GAT.py`, `SAGE.py`, `GIN.py`, `GT.py`: Individual model architectures.
-- **`sh/`**: Slurm-compatible shell scripts for HPC job submission.
-  - `run_gcn.sh`, `run_gat.sh`, etc.: Submit single-model training jobs.
-  - `run_all.sh`: Sequentially trains all models for a specific dataset/budget in one job.
-  - `run_combined.sh`: Runs the full experimental matrix (all models, budgets, and datasets).
-- **`eval/`**: Evaluation metrics and data utility functions.
-- **`logs/`**: Directory for Slurm output and error files.
-- **`requirements.txt`**: Python dependencies, including `wandb`.
-
-## Setup & Weights & Biases Logging
-
-The experiments are logged to Weights & Biases for real-time tracking and comparison.
-
-1. **Login to W&B**: Before running jobs on the HPC, ensure you are logged in:
-   ```bash
-   wandb login
-   ```
-2. **Specify Team (Entity)**: To log to a specific W&B team/entity, set the `WANDB_ENTITY` environment variable:
-   ```bash
-   export WANDB_ENTITY=your-team-name
-   ```
-   If not set, runs will log to your personal account.
-
-## Running Experiments on HPC (AI-LAB)
-
-The shell scripts are configured for the `gpu` partition with appropriate resource requests.
-
-### 1. Individual Model Runs
-To train a specific model (e.g., GCN) on the default dataset (Cora):
-```bash
-sbatch sh/run_gcn.sh
-```
-
-### 2. Sequential Runs (Multiple Models)
-To train all models (GCN, GAT, SAGE, GIN, GT) sequentially in a single GPU allocation:
-```bash
-sbatch sh/run_all.sh
-```
-
-### 3. Full Combined Matrix
-To run the complete benchmark (multiple datasets and label budgets) as defined in `run_experiments.py`:
-```bash
-sbatch sh/run_combined.sh
-```
-
-## Monitoring
-- **Slurm Status**: Use `squeue --me` to check your job status.
-- **Logs**: Check `logs/` for standard output (e.g., `cat logs/gcn_JOBID.out`).
-- **W&B Dashboard**: Visit [wandb.ai](https://wandb.ai) to view live training curves, metrics (Accuracy, F1-score), and hardware utilization.
+- `src/`: Core implementation files (`train.py`, `run_experiments.py`, and model architectures).
+- `sh/`: Slurm-compatible shell scripts for HPC submission.
+- `eval/`: Evaluation metrics and data utility functions.
+- `requirements.txt`: Python dependencies.
+- `Dockerfile`: Configuration for building the container image.

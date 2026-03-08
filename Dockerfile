@@ -21,4 +21,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Set the default command to run the combined experiments
-CMD ["python", "src/run_experiments.py"]
+CMD ["python", "src/run_experiments.py", "--use_wandb"]
