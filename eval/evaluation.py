@@ -1,13 +1,11 @@
-
+import torch
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-
-
-# Main evaluation function
 
 def evaluate(model, data):
     model.eval()
-    out = model(data.x, data.edge_index)
-    pred = out.argmax(dim=1)
+    with torch.no_grad():
+        out = model(data.x, data.edge_index)
+        pred = out.argmax(dim=1)
 
     y_true = data.y[data.test_mask].cpu().numpy()
     y_pred = pred[data.test_mask].cpu().numpy()

@@ -1,5 +1,4 @@
-
-
+import torch
 
 def set_few_label_mask(data, num_labels_per_class, seed):
     torch.manual_seed(seed)
