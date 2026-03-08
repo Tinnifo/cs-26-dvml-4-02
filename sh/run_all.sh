@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=gnn-all-models
-#SBATCH --partition=gpu
+#SBATCH --partition=prioritized
+#SBATCH --account=aau
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G

@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=gnn-gat
-#SBATCH --partition=gpu
+#SBATCH --partition=prioritized
+#SBATCH --account=aau
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
