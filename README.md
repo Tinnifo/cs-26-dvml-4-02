@@ -1,71 +1,58 @@
-# GNN Reproducibility Project
+# GNN Benchmarking on Planetoid Datasets (AAU AI-LAB HPC)
 
-This project aims to provide a modular and reproducible framework for testing various Graph Neural Networks (GNNs) on Planetoid datasets (Cora, CiteSeer, PubMed).
+This project benchmarks various Graph Neural Network (GNN) models on Planetoid datasets (Cora, CiteSeer), optimized for the **AAU AI-LAB HPC** environment with integrated **Weights & Biases (W&B)** logging.
 
 ## Project Structure
 
-- `src/`: Contains model definitions and training logic.
-    - `GCN.py`, `GAT.py`, `SAGE.py`, `GIN.py`, `GT.py`: Individual GNN model implementations.
-    - `train.py`: Main entry point for training individual models with arguments.
-    - `run_experiments.py`: Script to run the full matrix of experiments.
-- `eval/`: Contains evaluation scripts and utilities.
-    - `evaluation.py`: Metrics and evaluation logic.
-    - `Utils.py`: Data utilities like few-shot mask generation.
-- `sh/`: Shell scripts to run experiments.
-    - `run_gcn.sh`, `run_gat.sh`, etc.: Run individual models.
-    - `run_combined.sh`: Runs the full experimental matrix.
-- `Dockerfile`: Containerization for reproducibility.
-- `requirements.txt`: Python dependencies.
+- **`src/`**: Core implementation files.
+  - `train.py`: Primary script for training a single model with configurable parameters and W&B logging.
+  - `run_experiments.py`: Script to run a comprehensive suite of experiments across multiple models, datasets, and label budgets.
+  - `GCN.py`, `GAT.py`, `SAGE.py`, `GIN.py`, `GT.py`: Individual model architectures.
+- **`sh/`**: Slurm-compatible shell scripts for HPC job submission.
+  - `run_gcn.sh`, `run_gat.sh`, etc.: Submit single-model training jobs.
+  - `run_all.sh`: Sequentially trains all models for a specific dataset/budget in one job.
+  - `run_combined.sh`: Runs the full experimental matrix (all models, budgets, and datasets).
+- **`eval/`**: Evaluation metrics and data utility functions.
+- **`logs/`**: Directory for Slurm output and error files.
+- **`requirements.txt`**: Python dependencies, including `wandb`.
 
-## Setup Instructions
+## Setup & Weights & Biases Logging
 
-### Local Setup (Virtual Environment)
+The experiments are logged to Weights & Biases for real-time tracking and comparison.
 
-1. **Create a virtual environment:**
+1. **Login to W&B**: Before running jobs on the HPC, ensure you are logged in:
    ```bash
-   python3 -m venv .venv
+   wandb login
    ```
-
-2. **Activate the environment:**
-   - On macOS/Linux:
-     ```bash
-     source .venv/bin/activate
-     ```
-   - On Windows:
-     ```bash
-     .venv\Scripts\activate
-     ```
-
-3. **Install dependencies:**
+2. **Specify Team (Entity)**: To log to a specific W&B team/entity, set the `WANDB_ENTITY` environment variable:
    ```bash
-   pip install -r requirements.txt
+   export WANDB_ENTITY=your-team-name
    ```
+   If not set, runs will log to your personal account.
 
-### Docker Setup
+## Running Experiments on HPC (AI-LAB)
 
-1. **Build the image:**
-   ```bash
-   docker build -t gnn-experiments .
-   ```
+The shell scripts are configured for the `gpu` partition with appropriate resource requests.
 
-2. **Run the full experiment suite:**
-   ```bash
-   docker run gnn-experiments
-   ```
-
-## Running Experiments
-
-### Individual Model Run
-To run a specific model with custom parameters:
+### 1. Individual Model Runs
+To train a specific model (e.g., GCN) on the default dataset (Cora):
 ```bash
-python3 src/train.py --model GCN --dataset Cora --budget 20
+sbatch sh/run_gcn.sh
 ```
 
-### Full Experimental Matrix
-To run all models across all datasets, budgets, and seeds:
+### 2. Sequential Runs (Multiple Models)
+To train all models (GCN, GAT, SAGE, GIN, GT) sequentially in a single GPU allocation:
 ```bash
-./sh/run_combined.sh
+sbatch sh/run_all.sh
 ```
 
-## Reproducibility
-The framework uses fixed seeds for consistent results. All configurations are centralized in `src/run_experiments.py` and can be customized via arguments in `src/train.py`.
+### 3. Full Combined Matrix
+To run the complete benchmark (multiple datasets and label budgets) as defined in `run_experiments.py`:
+```bash
+sbatch sh/run_combined.sh
+```
+
+## Monitoring
+- **Slurm Status**: Use `squeue --me` to check your job status.
+- **Logs**: Check `logs/` for standard output (e.g., `cat logs/gcn_JOBID.out`).
+- **W&B Dashboard**: Visit [wandb.ai](https://wandb.ai) to view live training curves, metrics (Accuracy, F1-score), and hardware utilization.

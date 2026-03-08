@@ -2,3 +2,4 @@ torch
 torch-geometric
 numpy
 scikit-learn
+wandb

@@ -1,8 +1,10 @@
 import torch
 import torch.nn.functional as F
 import numpy as np
+import argparse
 import sys
 import os
+import wandb
 
 # Add parent directory to path to allow imports from eval
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -45,6 +47,13 @@ def get_model(name, num_features, num_classes, hidden_dim):
         raise ValueError(f"Unknown model: {name}")
 
 def main():
+    parser = argparse.ArgumentParser(description='Run all GNN experiments')
+    parser.add_argument('--use_wandb', action='store_true', help='Use Weights & Biases for logging')
+    parser.add_argument('--wandb_project', type=str, default='gnn-experiments', help='WandB project name')
+    parser.add_argument('--wandb_entity', type=str, default=None, help='WandB entity (team or username)')
+    parser.add_argument('--wandb_group', type=str, default='combined-runs', help='WandB group name')
+    args = parser.parse_args()
+
     for dataset_name in DATASETS:
         print(f"\n========== DATASET: {dataset_name} ==========")
 
@@ -55,6 +64,24 @@ def main():
             print(f"\n---- Model: {model_name} ----")
 
             for budget in BUDGETS:
+                if args.use_wandb:
+                    run = wandb.init(
+                        project=args.wandb_project,
+                        entity=args.wandb_entity,
+                        group=args.wandb_group,
+                        name=f"{model_name}_{dataset_name}_budget{budget}",
+                        config={
+                            "dataset": dataset_name,
+                            "model": model_name,
+                            "budget": budget,
+                            "epochs": EPOCHS,
+                            "hidden_dim": HIDDEN_DIM,
+                            "lr": LR,
+                            "seeds": SEEDS
+                        },
+                        reinit=True
+                    )
+
                 all_metrics = []
 
                 for seed in SEEDS:
@@ -80,6 +107,12 @@ def main():
                     metrics = evaluate(model, data)
                     all_metrics.append(metrics)
 
+                    if args.use_wandb:
+                        wandb.log({
+                            f"seed_{seed}/accuracy": metrics[0],
+                            f"seed_{seed}/macro_f1": metrics[3]
+                        })
+
                 all_metrics = np.array(all_metrics)
                 mean_metrics = np.mean(all_metrics, axis=0)
                 std_metrics = np.std(all_metrics, axis=0)
@@ -89,6 +122,21 @@ def main():
                     f"Acc={mean_metrics[0]:.4f}±{std_metrics[0]:.4f} | "
                     f"MacroF1={mean_metrics[3]:.4f}±{std_metrics[3]:.4f}"
                 )
+
+                if args.use_wandb:
+                    wandb.log({
+                        "mean_accuracy": mean_metrics[0],
+                        "std_accuracy": std_metrics[0],
+                        "mean_precision": mean_metrics[1],
+                        "std_precision": std_metrics[1],
+                        "mean_recall": mean_metrics[2],
+                        "std_recall": std_metrics[2],
+                        "mean_macro_f1": mean_metrics[3],
+                        "std_macro_f1": std_metrics[3],
+                        "mean_micro_f1": mean_metrics[4],
+                        "std_micro_f1": std_metrics[4],
+                    })
+                    run.finish()
 
 if __name__ == "__main__":
     main()

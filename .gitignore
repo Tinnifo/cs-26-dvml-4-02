@@ -138,6 +138,12 @@ data/
 models/*.pth
 models/*.pt
 
+# HPC Logs
+logs/
+
+# Weights & Biases
+wandb/
+
 # IDEs
 .idea/
 .vscode/

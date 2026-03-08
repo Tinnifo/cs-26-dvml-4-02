@@ -4,6 +4,7 @@ import numpy as np
 import argparse
 import sys
 import os
+import wandb
 
 # Add parent directory to path to allow imports from eval
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,12 +41,23 @@ def main():
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
     parser.add_argument('--hidden_dim', type=int, default=16, help='Hidden dimension')
     parser.add_argument('--seeds', type=int, nargs='+', default=[0, 1, 2, 3, 4], help='Random seeds for experiments')
+    parser.add_argument('--use_wandb', action='store_true', help='Use Weights & Biases for logging')
+    parser.add_argument('--wandb_project', type=str, default='gnn-experiments', help='WandB project name')
+    parser.add_argument('--wandb_entity', type=str, default=None, help='WandB entity (team or username)')
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     print(f"\n========== DATASET: {args.dataset} | MODEL: {args.model} | BUDGET: {args.budget} ==========")
+
+    if args.use_wandb:
+        wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=f"{args.model}_{args.dataset}_budget{args.budget}",
+            config=vars(args)
+        )
 
     dataset = Planetoid(root=f'data/{args.dataset}', name=args.dataset)
     base_data = dataset[0].to(device)
@@ -71,13 +83,42 @@ def main():
             )
             loss.backward()
             optimizer.step()
+            
+            if args.use_wandb and len(args.seeds) == 1:
+                wandb.log({"loss": loss.item(), "epoch": epoch})
 
         metrics = evaluate(model, data)
         all_metrics.append(metrics)
+        
+        if args.use_wandb and len(args.seeds) > 1:
+            wandb.log({
+                f"seed_{seed}/accuracy": metrics[0],
+                f"seed_{seed}/precision": metrics[1],
+                f"seed_{seed}/recall": metrics[2],
+                f"seed_{seed}/macro_f1": metrics[3],
+                f"seed_{seed}/micro_f1": metrics[4]
+            })
 
     all_metrics = np.array(all_metrics)
     mean_metrics = np.mean(all_metrics, axis=0)
     std_metrics = np.std(all_metrics, axis=0)
+
+    results = {
+        "mean_accuracy": mean_metrics[0],
+        "std_accuracy": std_metrics[0],
+        "mean_precision": mean_metrics[1],
+        "std_precision": std_metrics[1],
+        "mean_recall": mean_metrics[2],
+        "std_recall": std_metrics[2],
+        "mean_macro_f1": mean_metrics[3],
+        "std_macro_f1": std_metrics[3],
+        "mean_micro_f1": mean_metrics[4],
+        "std_micro_f1": std_metrics[4],
+    }
+
+    if args.use_wandb:
+        wandb.log(results)
+        wandb.finish()
 
     print(
         f"Results for {args.model} on {args.dataset} (Budget {args.budget}):\n"
