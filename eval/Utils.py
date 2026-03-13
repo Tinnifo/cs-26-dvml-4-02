@@ -13,3 +13,17 @@ def set_few_label_mask(data, num_labels_per_class, seed):
 
     data.train_mask = train_mask
     return data
+
+def set_budget_percent(data, percent, seed):
+    torch.manual_seed(seed)
+    # number of training nodes determined by label budget
+    num_train = int(percent * data.num_nodes)
+    # randomly choose nodes
+    idx = torch.randperm(data.num_nodes)[:num_train]
+
+    train_mask = torch.zeros(data.num_nodes, dtype=torch.bool)
+    train_mask[idx] = True
+
+    data.train_mask = train_mask
+
+    return data
