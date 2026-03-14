@@ -6,7 +6,7 @@
 #SBATCH --time=04:00:00
 #SBATCH --output=logs/combined_%j.out
 
-cd $HOME/cs-26-dvml-4-02
+cd $HOME/p4/cs-26-dvml-4-02
 source .venv/bin/activate
 WANDB_ENTITY=${WANDB_ENTITY:-""}
 
