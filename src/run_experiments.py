@@ -5,23 +5,6 @@ import argparse
 import sys
 import os
 import wandb
-
-# Add parent directory to path to allow imports from eval
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from torch_geometric.datasets import Planetoid
-from src.GCN import GCN
-from src.GAT import GAT
-from src.SAGE import GraphSAGE
-from src.GIN import GIN
-from src.GT import GraphTransformer
-import torch
-import torch.nn.functional as F
-import numpy as np
-import argparse
-import sys
-import os
-import wandb
 import json
 
 # Add parent directory to path to allow imports from eval
@@ -51,9 +34,11 @@ def main():
     parser.add_argument('--config', type=str, default='src/config.json', help='Path to JSON config file')
     parser.add_argument('--use_wandb', action='store_true', help='Use Weights & Biases for logging')
     parser.add_argument('--wandb_project', type=str, default='gnn-experiments', help='WandB project name')
-    parser.add_argument('--wandb_entity', type=str, default=None, help='WandB entity (team or username)')
+    parser.add_argument('--wandb_entity', type=str, default='cs-26-dvml-4-02', help='WandB entity (team or username)')
     parser.add_argument('--wandb_group', type=str, default='combined-runs', help='WandB group name')
     args = parser.parse_args()
+
+    import datetime
 
     # Load configuration
     with open(args.config, 'r') as f:
@@ -72,13 +57,15 @@ def main():
 
             for budget in config['budgets']:
                 budget_str = f"{int(budget)}" if budget >= 1 else f"{budget*100:.1f}%"
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 
                 if args.use_wandb:
+                    run_name = f"{model_name}_{dataset_name}_budget{budget_str}_{timestamp}"
                     run = wandb.init(
                         project=args.wandb_project,
                         entity=args.wandb_entity,
                         group=args.wandb_group,
-                        name=f"{model_name}_{dataset_name}_budget{budget_str}",
+                        name=run_name,
                         config={
                             "dataset": dataset_name,
                             "model": model_name,
