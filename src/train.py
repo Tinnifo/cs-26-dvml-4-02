@@ -160,36 +160,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    all_metrics = np.array(all_metrics)
-    mean_metrics = np.mean(all_metrics, axis=0)
-    std_metrics = np.std(all_metrics, axis=0)
-
-    results = {
-        "mean_accuracy": mean_metrics[0],
-        "std_accuracy": std_metrics[0],
-        "mean_precision": mean_metrics[1],
-        "std_precision": std_metrics[1],
-        "mean_recall": mean_metrics[2],
-        "std_recall": std_metrics[2],
-        "mean_macro_f1": mean_metrics[3],
-        "std_macro_f1": std_metrics[3],
-        "mean_micro_f1": mean_metrics[4],
-        "std_micro_f1": std_metrics[4],
-    }
-
-    if args.use_wandb:
-        wandb.log(results)
-        wandb.finish()
-
-    print(
-        f"Results for {args.model} on {args.dataset} (Budget {args.budget}):\n"
-        f"Accuracy:  {mean_metrics[0]:.4f} ± {std_metrics[0]:.4f}\n"
-        f"Precision: {mean_metrics[1]:.4f} ± {std_metrics[1]:.4f}\n"
-        f"Recall:    {mean_metrics[2]:.4f} ± {std_metrics[2]:.4f}\n"
-        f"Macro F1:  {mean_metrics[3]:.4f} ± {std_metrics[3]:.4f}\n"
-        f"Micro F1:  {mean_metrics[4]:.4f} ± {std_metrics[4]:.4f}"
-    )
-
-if __name__ == "__main__":
-    main()

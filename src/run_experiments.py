@@ -159,21 +159,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-                if args.use_wandb:
-                    wandb.log({
-                        "mean_accuracy": mean_metrics[0],
-                        "std_accuracy": std_metrics[0],
-                        "mean_precision": mean_metrics[1],
-                        "std_precision": std_metrics[1],
-                        "mean_recall": mean_metrics[2],
-                        "std_recall": std_metrics[2],
-                        "mean_macro_f1": mean_metrics[3],
-                        "std_macro_f1": std_metrics[3],
-                        "mean_micro_f1": mean_metrics[4],
-                        "std_micro_f1": std_metrics[4],
-                    })
-                    run.finish()
-
-if __name__ == "__main__":
-    main()
