@@ -1,7 +1,7 @@
 {
-    "datasets": ["Cora", "CiteSeer", "ggggg"],
+    "datasets": ["Cora", "CiteSeer", "PubMed"],
     "models": ["GCN", "GAT", "GIN", "SAGE", "GT"],
-    "budgets": [1, 3, 5, 10, 0.03],
+    "budgets": [1, 3, 5, 10, 20],
     "seeds": [0, 1, 2, 3, 4],
     "epochs": 200,
     "hidden_dim": 16,
