@@ -1,5 +1,6 @@
 import torch
 
+# Function that sets the train mask for a given dataset based on the number of labels per class
 def set_few_label_mask(data, num_labels_per_class, seed):
     torch.manual_seed(seed)
     num_classes = int(data.y.max()) + 1
@@ -15,10 +16,11 @@ def set_few_label_mask(data, num_labels_per_class, seed):
     return data
 
 
-def set_budget_percent(data, percent, seed):
+# Function that sets the train mask for a given dataset based on a fraction of nodes
+def set_budget_percent(data, fraction, seed):
     torch.manual_seed(seed)
     # number of training nodes determined by label budget
-    num_train = int(percent * data.num_nodes)
+    num_train = int(fraction * data.num_nodes)
     # randomly choose nodes
     idx = torch.randperm(data.num_nodes)[:num_train]
 
