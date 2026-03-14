@@ -1,12 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=gnn-combined
+#SBATCH --partition=prioritized
+#SBATCH --account=aau
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=15
 #SBATCH --mem=24G
 #SBATCH --time=04:00:00
 #SBATCH --output=logs/combined_%j.out
 
-cd $HOME/p4/cs-26-dvml-4-02
 source .venv/bin/activate
 WANDB_ENTITY=${WANDB_ENTITY:-""}
 
