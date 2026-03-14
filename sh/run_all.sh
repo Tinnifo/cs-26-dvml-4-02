@@ -11,11 +11,6 @@
 source .venv/bin/activate
 WANDB_ENTITY=${WANDB_ENTITY:-""}
 
-echo "Running all GNN experiments sequentially..."
+echo "Running all GNN experiments using src/config.json..."
 
-for model in GCN GAT SAGE GIN GT
-do
-    echo "------------------------------------------------"
-    echo "Running $model..."
-    python3 src/train.py --model $model --dataset Cora --budget 20 --use_wandb ${WANDB_ENTITY:+--wandb_entity $WANDB_ENTITY}
-done
+python3 src/run_experiments.py --use_wandb ${WANDB_ENTITY:+--wandb_entity $WANDB_ENTITY}
