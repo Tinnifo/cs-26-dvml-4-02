@@ -43,9 +43,12 @@ def main():
     parser.add_argument('--seeds', type=int, nargs='+', default=[0, 1, 2, 3, 4], help='Random seeds for experiments')
     parser.add_argument('--use_wandb', action='store_true', help='Use Weights & Biases for logging')
     parser.add_argument('--wandb_project', type=str, default='gnn-experiments', help='WandB project name')
-    parser.add_argument('--wandb_entity', type=str, default=None, help='WandB entity (team or username)')
+    parser.add_argument('--wandb_entity', type=str, default='cs-26-dvml-4-02', help='WandB entity (team or username)')
     parser.add_argument('--config', type=str, default=None, help='Path to JSON config file')
     args = parser.parse_args()
+
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Override args with config file if provided
     if args.config:
@@ -62,10 +65,11 @@ def main():
     print(f"\n========== DATASET: {args.dataset} | MODEL: {args.model} | BUDGET: {budget_str} ==========")
 
     if args.use_wandb:
+        run_name = f"{args.model}_{args.dataset}_budget{budget_str}_{timestamp}"
         wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
-            name=f"{args.model}_{args.dataset}_budget{budget_str}",
+            name=run_name,
             config=vars(args)
         )
 
