@@ -108,6 +108,10 @@ def main():
                         if hasattr(data, 'val_mask') and data.val_mask.sum() > 0:
                             val_metrics = evaluate(model, data, mask=data.val_mask)
                             val_acc = val_metrics[0]
+
+                            if args.use_wandb:
+                                wandb.log({"val_acc": val_acc, "epoch": epoch})
+
                             if val_acc > best_val_acc:
                                 best_val_acc = val_acc
                                 counter = 0
