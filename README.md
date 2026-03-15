@@ -2,6 +2,9 @@
 
 This project benchmarks various Graph Neural Network (GNN) models on Planetoid datasets (Cora, CiteSeer, PubMed), with integrated **Weights & Biases (W&B)** logging for experiment tracking.
 
+
+# !!!!!! Husk at skifter **bold** tekst i linje 36 i src/run_experiments: parser.add_argument('--wandb_project', type=str, default='**gnn-experiments-tinni**', help='WandB project name') til jeres EGET navn. Ellers Overwriter I mine eksperimenter.
+
 ## 1. Prerequisites
 Ensure you have the following installed:
 - **Python 3.10** or newer.
