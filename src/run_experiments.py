@@ -33,7 +33,7 @@ def main():
     parser = argparse.ArgumentParser(description='Run all GNN experiments')
     parser.add_argument('--config', type=str, default='src/config.json', help='Path to JSON config file')
     parser.add_argument('--use_wandb', action='store_true', help='Use Weights & Biases for logging')
-    parser.add_argument('--wandb_project', type=str, default='gnn-experiments', help='WandB project name')
+    parser.add_argument('--wandb_project', type=str, default='gnn-experiments-tinni', help='WandB project name')
     parser.add_argument('--wandb_entity', type=str, default='cs-26-dvml-4-02', help='WandB entity (team or username)')
     parser.add_argument('--wandb_group', type=str, default='combined-runs', help='WandB group name')
     args = parser.parse_args()
@@ -55,8 +55,16 @@ def main():
         for model_name in config['models']:
             print(f"\n---- Model: {model_name} ----")
 
-            for budget in config['budgets']:
-                budget_str = f"{int(budget)}" if budget >= 1 else f"{budget*100:.1f}%"
+            # Combine per-class budgets and dataset-specific percentage budgets
+            current_budgets = config['budgets'] + config['dataset_budgets'].get(dataset_name, [])
+            
+            for budget in current_budgets:
+                # Format budget string for naming/display (use 3 decimal places for small percentages)
+                if budget >= 1:
+                    budget_str = f"{int(budget)}"
+                else:
+                    budget_str = f"{budget*100:.3f}%" if budget < 0.001 else f"{budget*100:.2f}%"
+                
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 
                 if args.use_wandb:
@@ -145,6 +153,17 @@ def main():
                         "std_accuracy": std_metrics[0],
                         "mean_macro_f1": mean_metrics[3],
                         "std_macro_f1": std_metrics[3],
+                        "budget": budget,
+                        "dataset": dataset_name,
+                        "model": model_name,
+                        "seed": seed
+                        "dataset_budgets": config['dataset_budgets'].get(dataset_name, [])
+                        "epochs": config['epochs'],
+                        "patience": config['patience'],
+                        "lr": config['lr'],
+                        "weight_decay": config['weight_decay'],
+                        "hidden_dim": config['hidden_dim'],
+                        "dropout": config['dropout']
                     })
                     run.finish()
 
