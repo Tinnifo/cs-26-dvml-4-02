@@ -156,14 +156,14 @@ def main():
                         "budget": budget,
                         "dataset": dataset_name,
                         "model": model_name,
-                        "seed": seed
-                        "dataset_budgets": config['dataset_budgets'].get(dataset_name, [])
+                        "seed": seed,
+                        "dataset_budgets": config['dataset_budgets'].get(dataset_name, []),
                         "epochs": config['epochs'],
                         "patience": config['patience'],
                         "lr": config['lr'],
                         "weight_decay": config['weight_decay'],
                         "hidden_dim": config['hidden_dim'],
-                        "dropout": config['dropout']
+                        "dropout": config['dropout'],
                     })
                     run.finish()
 
