@@ -1,7 +1,5 @@
 #!/bin/bash
 #SBATCH --job-name=gnn-combined
-#SBATCH --partition=batch
-#SBATCH --account=aau
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=15
 #SBATCH --mem=24G
