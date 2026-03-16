@@ -66,11 +66,26 @@ def main():
 
     if args.use_wandb:
         run_name = f"{args.model}_{args.dataset}_budget{budget_str}_{timestamp}"
+        
+        # Determine budget type
+        budget_type = "per-class" if args.budget >= 1 else "percentage"
+        
+        # Get dataset specific budgets if available in config_data
+        dataset_budgets = []
+        if args.config:
+            with open(args.config, 'r') as f:
+                config_data = json.load(f)
+                dataset_budgets = config_data.get('dataset_budgets', {}).get(args.dataset, [])
+
         wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
             name=run_name,
-            config=vars(args)
+            config={
+                **vars(args),
+                "budget_type": budget_type,
+                "dataset_budgets": dataset_budgets
+            }
         )
 
     # Use a consistent data directory
