@@ -85,6 +85,18 @@ def main():
                         },
                         reinit=True
                     )
+                    
+                    # x-axis options
+                    run.define_metric("budget", hidden=True)
+                    run.define_metric("dataset_budget", hidden=True)
+
+                    # curves vs budget
+                    run.define_metric("mean_accuracy", step_metric="budget")
+                    run.define_metric("mean_macro_f1", step_metric="budget")
+
+                    # curves vs dataset_budget
+                    run.define_metric("mean_accuracy_vs_dataset_budget", step_metric="dataset_budget")
+                    run.define_metric("mean_macro_f1_vs_dataset_budget", step_metric="dataset_budget")
 
                 all_metrics = []
 
@@ -148,14 +160,25 @@ def main():
                 ])
 
                 if args.use_wandb:
-                    wandb.log({
+                    ds_budgets = config['dataset_budgets'].get(dataset_name, [])
+                    dataset_budget = budget if budget in ds_budgets else None
+                    
+                    log_dict = {
+                        "budget": budget,
                         "mean_accuracy": mean_metrics[0],
-                        "std_accuracy": std_metrics[0],
-                        "moe_accuracy": moe_acc,
                         "mean_macro_f1": mean_metrics[3],
+                        "std_accuracy": std_metrics[0],
                         "std_macro_f1": std_metrics[3],
+                        "moe_accuracy": moe_acc,
                         "moe_macro_f1": moe_f1,
-                    })
+                    }
+                    if dataset_budget is not None:
+                        log_dict.update({
+                            "dataset_budget": dataset_budget,
+                            "mean_accuracy_vs_dataset_budget": mean_metrics[0],
+                            "mean_macro_f1_vs_dataset_budget": mean_metrics[3],
+                        })
+                    wandb.log(log_dict)
                     run.finish()
 
             # After all models for this budget, log the summary table
