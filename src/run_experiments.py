@@ -117,27 +117,60 @@ def main():
                     counter = 0
 
                     for epoch in range(config['epochs']):
+                        # --- 1. Training Phase ---
                         model.train()
                         optimizer.zero_grad()
                         out = model(data.x, data.edge_index)
-                        loss = F.cross_entropy(
+                        
+                        # Calculate standard training loss for backprop
+                        train_loss = F.cross_entropy(
                             out[data.train_mask],
                             data.y[data.train_mask]
                         )
-                        loss.backward()
+                        train_loss.backward()
                         optimizer.step()
 
-                        # Validation for early stopping
-                        if hasattr(data, 'val_mask') and data.val_mask.sum() > 0:
-                            val_metrics = evaluate(model, data, mask=data.val_mask)
-                            val_acc = val_metrics[0]
+                        # --- 2. Evaluation Phase (Overfitting Check) ---
+                        model.eval()
+                        with torch.no_grad():
+                            out_eval = model(data.x, data.edge_index)
+                            
+                            # Get Train Accuracy using evaluate function
+                            train_acc = evaluate(model, data, mask=data.train_mask)[0]
+                            
+                            log_dict = {
+                                f"seed_{seed}/epoch": epoch,
+                                f"seed_{seed}/train_loss": train_loss.item(),
+                                f"seed_{seed}/train_acc": train_acc
+                            }
 
-                            if val_acc > best_val_acc:
-                                best_val_acc = val_acc
-                                counter = 0
-                            else:
-                                counter += 1
-                            if counter >= config['patience']:
+                            if hasattr(data, 'val_mask') and data.val_mask.sum() > 0:
+                                # Calculate Validation Loss
+                                val_loss = F.cross_entropy(
+                                    out_eval[data.val_mask],
+                                    data.y[data.val_mask]
+                                ).item()
+                                
+                                # Get Validation Accuracy
+                                val_acc = evaluate(model, data, mask=data.val_mask)[0]
+                                
+                                log_dict.update({
+                                    f"seed_{seed}/val_loss": val_loss,
+                                    f"seed_{seed}/val_acc": val_acc
+                                })
+
+                                # Early Stopping Logic
+                                if val_acc > best_val_acc:
+                                    best_val_acc = val_acc
+                                    counter = 0
+                                else:
+                                    counter += 1
+                            
+                            # Log ALL metrics to W&B to spot overfitting
+                            if args.use_wandb:
+                                wandb.log(log_dict)
+                            
+                            if hasattr(data, 'val_mask') and data.val_mask.sum() > 0 and counter >= config['patience']:
                                 break
 
                     metrics = evaluate(model, data)
