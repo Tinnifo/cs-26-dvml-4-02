@@ -34,7 +34,7 @@ def main():
     parser = argparse.ArgumentParser(description='Run all GNN experiments')
     parser.add_argument('--config', type=str, default='src/config.json', help='Path to JSON config file')
     parser.add_argument('--use_wandb', action='store_true', help='Use Weights & Biases for logging')
-    parser.add_argument('--wandb_project', type=str, default='gnn-experiments-tinni', help='WandB project name')
+    parser.add_argument('--wandb_project', type=str, default='gnn-experiments-test', help='WandB project name')
     parser.add_argument('--wandb_entity', type=str, default='cs-26-dvml-4-02', help='WandB entity (team or username)')
     parser.add_argument('--wandb_group', type=str, default='combined-runs', help='WandB group name')
     args = parser.parse_args()
