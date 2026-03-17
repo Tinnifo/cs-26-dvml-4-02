@@ -6,6 +6,7 @@ import sys
 import os
 import wandb
 import json
+import datetime
 
 # Add parent directory to path to allow imports from eval
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,12 +34,10 @@ def main():
     parser = argparse.ArgumentParser(description='Run all GNN experiments')
     parser.add_argument('--config', type=str, default='src/config.json', help='Path to JSON config file')
     parser.add_argument('--use_wandb', action='store_true', help='Use Weights & Biases for logging')
-    parser.add_argument('--wandb_project', type=str, default='gnn-experiments', help='WandB project name')
+    parser.add_argument('--wandb_project', type=str, default='gnn-experiments-test', help='WandB project name')
     parser.add_argument('--wandb_entity', type=str, default='cs-26-dvml-4-02', help='WandB entity (team or username)')
     parser.add_argument('--wandb_group', type=str, default='combined-runs', help='WandB group name')
     args = parser.parse_args()
-
-    import datetime
 
     # Load configuration
     with open(args.config, 'r') as f:
@@ -52,11 +51,21 @@ def main():
         dataset = Planetoid(root='data', name=dataset_name)
         base_data = dataset[0].to(device)
 
-        for model_name in config['models']:
-            print(f"\n---- Model: {model_name} ----")
+        # Combine per-class budgets and dataset-specific percentage budgets
+        current_budgets = config['budgets'] + config['dataset_budgets'].get(dataset_name, [])
 
-            for budget in config['budgets']:
-                budget_str = f"{int(budget)}" if budget >= 1 else f"{budget*100:.1f}%"
+        for budget in current_budgets:
+            # Format budget string for naming/display (use 3 decimal places for small percentages)
+            if budget >= 1:
+                budget_str = f"{int(budget)}"
+            else:
+                budget_str = f"{budget*100:.3f}%" if budget < 0.001 else f"{budget*100:.2f}%"
+            
+            print(f"\n---- Budget: {budget_str} ----")
+            results_for_table = []
+
+            for model_name in config['models']:
+                print(f"Model: {model_name}")
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 
                 if args.use_wandb:
@@ -64,16 +73,30 @@ def main():
                     run = wandb.init(
                         project=args.wandb_project,
                         entity=args.wandb_entity,
-                        group=args.wandb_group,
+                        group=f"{args.wandb_group}_{dataset_name}_budget{budget_str}",
                         name=run_name,
                         config={
+                            **config,
                             "dataset": dataset_name,
                             "model": model_name,
                             "budget": budget,
-                            **config
+                            "budget_type": "per-class" if budget >= 1 else "percentage",
+                            "dataset_budgets": config['dataset_budgets'].get(dataset_name, [])
                         },
                         reinit=True
                     )
+                    
+                    # x-axis options
+                    run.define_metric("budget", hidden=True)
+                    run.define_metric("dataset_budget", hidden=True)
+
+                    # curves vs budget
+                    run.define_metric("mean_accuracy", step_metric="budget")
+                    run.define_metric("mean_macro_f1", step_metric="budget")
+
+                    # curves vs dataset_budget
+                    run.define_metric("mean_accuracy_vs_dataset_budget", step_metric="dataset_budget")
+                    run.define_metric("mean_macro_f1_vs_dataset_budget", step_metric="dataset_budget")
 
                 all_metrics = []
 
@@ -94,59 +117,128 @@ def main():
                     counter = 0
 
                     for epoch in range(config['epochs']):
+                        # --- 1. Training Phase ---
                         model.train()
                         optimizer.zero_grad()
                         out = model(data.x, data.edge_index)
-                        loss = F.cross_entropy(
+                        
+                        # Calculate standard training loss for backprop
+                        train_loss = F.cross_entropy(
                             out[data.train_mask],
                             data.y[data.train_mask]
                         )
-                        loss.backward()
+                        train_loss.backward()
                         optimizer.step()
 
-                        # Validation for early stopping
-                        if hasattr(data, 'val_mask') and data.val_mask.sum() > 0:
-                            val_metrics = evaluate(model, data, mask=data.val_mask)
-                            val_acc = val_metrics[0]
+                        # --- 2. Evaluation Phase (Overfitting Check) ---
+                        model.eval()
+                        with torch.no_grad():
+                            out_eval = model(data.x, data.edge_index)
+                            
+                            # Get Train Accuracy using evaluate function
+                            train_acc = evaluate(model, data, mask=data.train_mask)[0]
+                            
+                            log_dict = {
+                                f"seed_{seed}/epoch": epoch,
+                                f"seed_{seed}/train_loss": train_loss.item(),
+                                f"seed_{seed}/train_acc": train_acc
+                            }
 
+                            if hasattr(data, 'val_mask') and data.val_mask.sum() > 0:
+                                # Calculate Validation Loss
+                                val_loss = F.cross_entropy(
+                                    out_eval[data.val_mask],
+                                    data.y[data.val_mask]
+                                ).item()
+                                
+                                # Get Validation Accuracy
+                                val_acc = evaluate(model, data, mask=data.val_mask)[0]
+                                
+                                log_dict.update({
+                                    f"seed_{seed}/val_loss": val_loss,
+                                    f"seed_{seed}/val_acc": val_acc
+                                })
+
+                                # Early Stopping Logic
+                                if val_acc > best_val_acc:
+                                    best_val_acc = val_acc
+                                    counter = 0
+                                else:
+                                    counter += 1
+                            
+                            # Log ALL metrics to W&B to spot overfitting
                             if args.use_wandb:
-                                wandb.log({"val_acc": val_acc, "epoch": epoch})
-
-                            if val_acc > best_val_acc:
-                                best_val_acc = val_acc
-                                counter = 0
-                            else:
-                                counter += 1
-                            if counter >= config['patience']:
+                                wandb.log(log_dict)
+                            
+                            if hasattr(data, 'val_mask') and data.val_mask.sum() > 0 and counter >= config['patience']:
                                 break
 
                     metrics = evaluate(model, data)
                     all_metrics.append(metrics)
 
-                    if args.use_wandb:
-                        wandb.log({
-                            f"seed_{seed}/accuracy": metrics[0],
-                            f"seed_{seed}/macro_f1": metrics[3]
-                        })
-
                 all_metrics = np.array(all_metrics)
                 mean_metrics = np.mean(all_metrics, axis=0)
                 std_metrics = np.std(all_metrics, axis=0)
+                
+                # Calculate margin of error (95% CI)
+                n = len(config['seeds'])
+                moe_acc = 1.96 * (std_metrics[0] / np.sqrt(n))
+                moe_f1 = 1.96 * (std_metrics[3] / np.sqrt(n))
 
-                print(
-                    f"Budget {budget_str} | "
-                    f"Acc={mean_metrics[0]:.4f}±{std_metrics[0]:.4f} | "
-                    f"MacroF1={mean_metrics[3]:.4f}±{std_metrics[3]:.4f}"
-                )
+                # Store for the summary table
+                results_for_table.append([
+                    model_name,
+                    mean_metrics[0], std_metrics[0], moe_acc,
+                    mean_metrics[3], std_metrics[3], moe_f1
+                ])
 
                 if args.use_wandb:
-                    wandb.log({
+                    ds_budgets = config['dataset_budgets'].get(dataset_name, [])
+                    dataset_budget = budget if budget in ds_budgets else None
+                    
+                    log_dict = {
+                        "budget": budget,
                         "mean_accuracy": mean_metrics[0],
-                        "std_accuracy": std_metrics[0],
                         "mean_macro_f1": mean_metrics[3],
+                        "std_accuracy": std_metrics[0],
                         "std_macro_f1": std_metrics[3],
-                    })
+                        "moe_accuracy": moe_acc,
+                        "moe_macro_f1": moe_f1,
+                    }
+                    if dataset_budget is not None:
+                        log_dict.update({
+                            "dataset_budget": dataset_budget,
+                            "mean_accuracy_vs_dataset_budget": mean_metrics[0],
+                            "mean_macro_f1_vs_dataset_budget": mean_metrics[3],
+                        })
+                    wandb.log(log_dict)
                     run.finish()
+
+            # After all models for this budget, log the summary table
+            if args.use_wandb and results_for_table:
+                summary_run = wandb.init(
+                    project=args.wandb_project,
+                    entity=args.wandb_entity,
+                    group=f"{args.wandb_group}_{dataset_name}_budget{budget_str}",
+                    name=f"Summary_{dataset_name}_budget{budget_str}",
+                    config={
+                        **config,
+                        "dataset": dataset_name,
+                        "budget": budget,
+                        "budget_type": "per-class" if budget >= 1 else "percentage",
+                        "dataset_budgets": config['dataset_budgets'].get(dataset_name, [])
+                    },
+                    reinit=True
+                )
+                
+                columns = [
+                    "Model", 
+                    "Mean Accuracy", "Std Accuracy", "MoE Accuracy", 
+                    "Mean Macro F1", "Std Macro F1", "MoE Macro F1"
+                ]
+                summary_table = wandb.Table(columns=columns, data=results_for_table)
+                summary_run.log({"results_table": summary_table})
+                summary_run.finish()
 
 if __name__ == "__main__":
     main()

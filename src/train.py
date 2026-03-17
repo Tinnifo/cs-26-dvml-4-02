@@ -66,11 +66,26 @@ def main():
 
     if args.use_wandb:
         run_name = f"{args.model}_{args.dataset}_budget{budget_str}_{timestamp}"
+        
+        # Determine budget type
+        budget_type = "per-class" if args.budget >= 1 else "percentage"
+        
+        # Get dataset specific budgets if available in config_data
+        dataset_budgets = []
+        if args.config:
+            with open(args.config, 'r') as f:
+                config_data = json.load(f)
+                dataset_budgets = config_data.get('dataset_budgets', {}).get(args.dataset, [])
+
         wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
             name=run_name,
-            config=vars(args)
+            config={
+                **vars(args),
+                "budget_type": budget_type,
+                "dataset_budgets": dataset_budgets
+            }
         )
 
     # Use a consistent data directory
@@ -97,40 +112,62 @@ def main():
         counter = 0
 
         for epoch in range(args.epochs):
+            # --- 1. Training Phase ---
             model.train()
             optimizer.zero_grad()
             out = model(data.x, data.edge_index)
-            loss = F.cross_entropy(
+            
+            # Calculate standard training loss for backprop
+            train_loss = F.cross_entropy(
                 out[data.train_mask],
                 data.y[data.train_mask]
             )
-            loss.backward()
+            train_loss.backward()
             optimizer.step()
             
-            # Validation step
-            if hasattr(data, 'val_mask') and data.val_mask.sum() > 0:
-                val_metrics = evaluate(model, data, mask=data.val_mask)
-                val_acc = val_metrics[0]
+            # --- 2. Evaluation Phase (Overfitting Check) ---
+            model.eval()
+            with torch.no_grad():
+                out_eval = model(data.x, data.edge_index)
                 
-                if val_acc > best_val_acc:
-                    best_val_acc = val_acc
-                    counter = 0
-                else:
-                    counter += 1
+                # Get Train Accuracy using evaluate function
+                train_acc = evaluate(model, data, mask=data.train_mask)[0]
                 
-                if args.use_wandb and len(args.seeds) == 1:
-                    wandb.log({
-                        "loss": loss.item(), 
-                        "val_acc": val_acc,
-                        "epoch": epoch
+                log_dict = {
+                    f"seed_{seed}/epoch": epoch,
+                    f"seed_{seed}/train_loss": train_loss.item(),
+                    f"seed_{seed}/train_acc": train_acc
+                }
+
+                if hasattr(data, 'val_mask') and data.val_mask.sum() > 0:
+                    # Calculate Validation Loss
+                    val_loss = F.cross_entropy(
+                        out_eval[data.val_mask],
+                        data.y[data.val_mask]
+                    ).item()
+                    
+                    # Get Validation Accuracy
+                    val_acc = evaluate(model, data, mask=data.val_mask)[0]
+                    
+                    log_dict.update({
+                        f"seed_{seed}/val_loss": val_loss,
+                        f"seed_{seed}/val_acc": val_acc
                     })
+                    
+                    # Early Stopping Logic
+                    if val_acc > best_val_acc:
+                        best_val_acc = val_acc
+                        counter = 0
+                    else:
+                        counter += 1
                 
-                if counter >= args.patience:
+                # Log ALL metrics to W&B to spot overfitting
+                if args.use_wandb:
+                    wandb.log(log_dict)
+                
+                if hasattr(data, 'val_mask') and data.val_mask.sum() > 0 and counter >= args.patience:
                     print(f"Seed {seed}: Early stopping at epoch {epoch}")
                     break
-            else:
-                if args.use_wandb and len(args.seeds) == 1:
-                    wandb.log({"loss": loss.item(), "epoch": epoch})
 
         metrics = evaluate(model, data)
         all_metrics.append(metrics)
