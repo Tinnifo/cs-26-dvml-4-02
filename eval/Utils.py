@@ -20,17 +20,19 @@ def set_few_label_mask(data, num_labels_per_class, seed):
     # Store the original train_mask to sample only from the original training nodes
     # This ensures consistency with standard benchmarks and avoids data leakage
     original_train_mask = data.train_mask.clone()
-    
-    # Initialize new train mask
-    train_mask = torch.zeros(data.num_nodes, dtype=torch.bool)
-    
+    device = data.train_mask.device
+
+    # Initialize new train mask on the same device as the data
+    train_mask = torch.zeros(data.num_nodes, dtype=torch.bool, device=device)
+
     for c in range(num_classes):
         # Sample only from nodes that belong to class c AND are in the original training set
         idx = ((data.y == c) & original_train_mask).nonzero(as_tuple=True)[0]
-        
-        # Shuffle indices
-        idx = idx[torch.randperm(idx.size(0))]
-        
+
+        # Shuffle indices (randperm on CPU for seed-determinism, then move to device)
+        perm = torch.randperm(idx.size(0)).to(device)
+        idx = idx[perm]
+
         # Select budget (or all available if budget > available)
         selected = idx[:num_labels_per_class]
         train_mask[selected] = True
@@ -51,22 +53,23 @@ def set_budget_percent(data, fraction, seed):
     # Sample only from the original training nodes
     original_train_mask = data.train_mask.clone()
     original_train_indices = original_train_mask.nonzero(as_tuple=True)[0]
-    
+    device = data.train_mask.device
+
     # Total available training nodes in the standard benchmark
     num_available = len(original_train_indices)
-    
+
     # Number of training nodes requested
     num_train = int(fraction * data.num_nodes)
-    
+
     if num_train > num_available:
         # We restrict to the original training pool to follow standard benchmarks
         num_train = num_available
 
     # Randomly choose nodes from the training pool
-    perm = torch.randperm(num_available)
+    perm = torch.randperm(num_available).to(device)
     selected_indices = original_train_indices[perm[:num_train]]
 
-    train_mask = torch.zeros(data.num_nodes, dtype=torch.bool)
+    train_mask = torch.zeros(data.num_nodes, dtype=torch.bool, device=device)
     train_mask[selected_indices] = True
 
     data.train_mask = train_mask
