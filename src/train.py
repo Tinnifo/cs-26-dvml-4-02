@@ -1,3 +1,4 @@
+import copy
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -109,14 +110,16 @@ def main():
 
         # Training
         best_val_acc = 0
+        best_state = None
         counter = 0
+        has_val = hasattr(data, 'val_mask') and data.val_mask.sum() > 0
 
         for epoch in range(args.epochs):
             # --- 1. Training Phase ---
             model.train()
             optimizer.zero_grad()
             out = model(data.x, data.edge_index)
-            
+
             # Calculate standard training loss for backprop
             train_loss = F.cross_entropy(
                 out[data.train_mask],
@@ -124,50 +127,51 @@ def main():
             )
             train_loss.backward()
             optimizer.step()
-            
+
             # --- 2. Evaluation Phase (Overfitting Check) ---
             model.eval()
             with torch.no_grad():
                 out_eval = model(data.x, data.edge_index)
-                
-                # Get Train Accuracy using evaluate function
-                train_acc = evaluate(model, data, mask=data.train_mask)[0]
-                
+                pred = out_eval.argmax(dim=1)
+
+                train_acc = (pred[data.train_mask] == data.y[data.train_mask]).float().mean().item()
+
                 log_dict = {
                     f"seed_{seed}/epoch": epoch,
                     f"seed_{seed}/train_loss": train_loss.item(),
                     f"seed_{seed}/train_acc": train_acc
                 }
 
-                if hasattr(data, 'val_mask') and data.val_mask.sum() > 0:
-                    # Calculate Validation Loss
+                if has_val:
                     val_loss = F.cross_entropy(
                         out_eval[data.val_mask],
                         data.y[data.val_mask]
                     ).item()
-                    
-                    # Get Validation Accuracy
-                    val_acc = evaluate(model, data, mask=data.val_mask)[0]
-                    
+                    val_acc = (pred[data.val_mask] == data.y[data.val_mask]).float().mean().item()
+
                     log_dict.update({
                         f"seed_{seed}/val_loss": val_loss,
                         f"seed_{seed}/val_acc": val_acc
                     })
-                    
-                    # Early Stopping Logic
+
+                    # Early stopping + best-model checkpoint
                     if val_acc > best_val_acc:
                         best_val_acc = val_acc
+                        best_state = copy.deepcopy(model.state_dict())
                         counter = 0
                     else:
                         counter += 1
-                
-                # Log ALL metrics to W&B to spot overfitting
+
                 if args.use_wandb:
                     wandb.log(log_dict)
-                
-                if hasattr(data, 'val_mask') and data.val_mask.sum() > 0 and counter >= args.patience:
+
+                if has_val and counter >= args.patience:
                     print(f"Seed {seed}: Early stopping at epoch {epoch}")
                     break
+
+        # Restore best weights before test evaluation
+        if best_state is not None:
+            model.load_state_dict(best_state)
 
         metrics = evaluate(model, data)
         all_metrics.append(metrics)
