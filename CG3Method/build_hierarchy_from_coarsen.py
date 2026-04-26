@@ -1,11 +1,32 @@
 import torch
 import numpy as np
-
 from coarsen import generate_hybrid_matching, create_coarse_graph
 from graph import Graph
-
 import scipy.sparse as sp
+from torch_geometric.utils import degree, add_self_loops
 
+def normalize_edge_index(edge_index, num_nodes, edge_weight=None):
+
+    if edge_weight is None:
+        edge_weight = torch.ones(edge_index.size(1), device=edge_index.device)
+
+    # ✅ ADD SELF LOOPS FIRST
+    edge_index, edge_weight = add_self_loops(
+        edge_index,
+        edge_weight,
+        fill_value=1.0,
+        num_nodes=num_nodes
+    )
+
+    row, col = edge_index
+
+    deg = degree(row, num_nodes, dtype=torch.float)
+    deg_inv_sqrt = deg.pow(-0.5)
+    deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
+
+    norm = deg_inv_sqrt[row] * edge_weight * deg_inv_sqrt[col]
+
+    return edge_index, norm
 
 def cmap2C(cmap):
     node_num = len(cmap)
@@ -87,7 +108,10 @@ def build_hierarchy(adj, num_levels=3):
     # ----------------------
     graph = convert_adj_to_graph(adj)
     graphs.append(graph)
-    edge_levels.append(graph_to_edge_index(graph))
+    
+    ei, ew = graph_to_edge_index(graph)
+    ei, ew = normalize_edge_index(ei, graph.node_num, ew)
+    edge_levels.append((ei, ew))
 
     # ----------------------
     # Coarsening loop
@@ -112,7 +136,10 @@ def build_hierarchy(adj, num_levels=3):
 
         graph = coarse_graph
         graphs.append(graph)
-        edge_levels.append(graph_to_edge_index(graph))
+        
+        ei, ew = graph_to_edge_index(graph)
+        ei, ew = normalize_edge_index(ei, graph.node_num, ew)
+        edge_levels.append((ei, ew))
 
     return edge_levels, C_matrices, graphs
 

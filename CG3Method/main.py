@@ -14,6 +14,11 @@ from torch_geometric.utils import to_scipy_sparse_matrix
 import torch
 import numpy as np
 import random
+seed = 42
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -35,7 +40,7 @@ class GCNBaseline(nn.Module):
 
 if __name__ == "__main__":
 
-    seeds = [0, 1, 2, 3, 4]
+    seeds = [0]
 
     cg3_results = []
     gcn_results = []

@@ -2,11 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
+from torch_geometric.utils import add_self_loops, degree
 
 
 class HGCN_PyG(nn.Module):
 
-    def __init__(self, in_dim, hidden_dim, num_levels=3):
+    def __init__(self, in_dim, hidden_dim, num_levels=2):
         super().__init__()
 
         self.num_levels = num_levels
@@ -14,18 +15,20 @@ class HGCN_PyG(nn.Module):
         # encoder / decoder
         self.enc_gcns = nn.ModuleList()
         self.dec_gcns = nn.ModuleList()
+        
+
         # 3 layers
         for i in range(num_levels):
             self.enc_gcns.append(
-                GCNConv(in_dim if i == 0 else hidden_dim, hidden_dim)
+                GCNConv(in_dim if i == 0 else hidden_dim, hidden_dim, normalize=False)
             )
 
             self.dec_gcns.append(
-                GCNConv(hidden_dim, hidden_dim)
+                GCNConv(hidden_dim, hidden_dim, normalize=False)
             )
 
         # bottleneck
-        self.bottleneck = GCNConv(hidden_dim, hidden_dim)
+        self.bottleneck = GCNConv(hidden_dim, hidden_dim, normalize=False)
 
         # hierarchy buffers
         self.edge_levels = None
@@ -43,50 +46,45 @@ class HGCN_PyG(nn.Module):
         enc_feats = []
         h = x
 
-        # ======================
-        # ENCODER (coarsening)
-        # ======================
-        for l in range(self.num_levels):
+        num_levels = len(self.edge_levels)
 
-            ei = self.edge_levels[l]
+        # ======================
+        # ENCODER
+        # ======================
+        for l in range(num_levels):
 
-            h = self.enc_gcns[l](
-                h, ei, edge_weight=edge_weight
-            )
+            ei, ew = self.edge_levels[l]
+
+            h = self.enc_gcns[l](h, ei, edge_weight=ew)
             h = F.relu(h)
 
             enc_feats.append(h)
 
-            # coarsen
-            if l < self.num_levels - 1:
+            if l < len(self.C_matrices):
                 C = self.C_matrices[l].coalesce().to(h.device)
                 h = torch.sparse.mm(C.t(), h)
 
         # ======================
         # BOTTLENECK
         # ======================
-        h = self.bottleneck(
-            h,
-            self.edge_levels[-1],
-            edge_weight=edge_weight
-        )
+        ei, ew = self.edge_levels[-1]
+
+        h = self.bottleneck(h, ei, edge_weight=ew)
         h = F.relu(h)
 
         # ======================
-        # DECODER (refinement)
+        # DECODER
         # ======================
-        for l in reversed(range(self.num_levels)):
+        for l in reversed(range(num_levels)):
 
-            ei = self.edge_levels[l]
+            ei, ew = self.edge_levels[l]
 
-            if l > 0:
+            if l - 1 < len(self.C_matrices) and l > 0:
                 C = self.C_matrices[l - 1].to(h.device)
                 h = torch.sparse.mm(C, h)
                 h = h + enc_feats[l - 1]
 
-            h = self.dec_gcns[l](
-                h, ei, edge_weight=edge_weight
-            )
+            h = self.dec_gcns[l](h, ei, edge_weight=ew)
             h = F.relu(h)
 
         return F.normalize(h, dim=1)

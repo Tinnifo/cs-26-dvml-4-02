@@ -12,8 +12,8 @@ class CG3Model(nn.Module):
             # ======================
             # GCN (local view)
             # ======================
-            self.gcn1 = GCNConv(in_dim, hidden_dim)
-            self.gcn2 = GCNConv(hidden_dim, hidden_dim)
+            self.gcn1 = GCNConv(in_dim, hidden_dim, normalize=False)
+            self.gcn2 = GCNConv(hidden_dim, hidden_dim, normalize=False)
 
             # ======================
             # HGCN (global view)
@@ -26,7 +26,7 @@ class CG3Model(nn.Module):
             self.W_edge = nn.Linear(hidden_dim, hidden_dim, bias=False)
 
             # FIXED paper fusion
-            self.alpha = 0.6
+            self.alpha = 0.8
 
             # classifier
             self.classifier = nn.Linear(hidden_dim, num_classes)
@@ -36,8 +36,9 @@ class CG3Model(nn.Module):
     # ---------------------
     def encode_gcn(self, x, edge_index, edge_weight):
         x = F.relu(self.gcn1(x, edge_index, edge_weight))
+        x = F.dropout(x, p=0.5, training=self.training)  # <-- ADD THIS
         x = self.gcn2(x, edge_index, edge_weight)
-        return F.normalize(x, dim=1)
+        return x
 
     # ---------------------
     # forward
@@ -45,14 +46,16 @@ class CG3Model(nn.Module):
     def forward(self, x, edge_index, edge_weight):
 
         z_gcn = self.encode_gcn(x, edge_index, edge_weight)
-
         z_hgcn = self.hgcn(x, edge_index, edge_weight)
 
-        # PAPER EXACT FUSION
-        z = F.normalize(
-            self.alpha * z_gcn + (1 - self.alpha) * z_hgcn,
-            dim=1
-        )
+        z_gcn = F.dropout(z_gcn, p=0.5, training=self.training)
+        z_hgcn = F.dropout(z_hgcn, p=0.5, training=self.training)
+
+        z_gcn = F.normalize(z_gcn, dim=1)
+        z_hgcn = F.normalize(z_hgcn, dim=1)
+
+        z = self.alpha * z_gcn + (1 - self.alpha) * z_hgcn
+        z = F.normalize(z, dim=1)
 
         logits = self.classifier(z)
 
@@ -88,9 +91,10 @@ class CG3Model(nn.Module):
 
         unsup_2 = pos_rev / denom_rev
 
-        unsup_loss = -hp1 * torch.log(
-            torch.cat([unsup_1, unsup_2]) + 1e-8
-        ).mean()
+        unsup_loss = -hp1 * (
+            torch.log(unsup_1 + 1e-8).mean() +
+            torch.log(unsup_2 + 1e-8).mean()
+        )
 
 
         # ======================
@@ -99,8 +103,11 @@ class CG3Model(nn.Module):
 
         h1 = z_gcn[train_idx]
         h2 = z_hgcn[train_idx]
+        h1 = F.normalize(h1, dim=1)
+        h2 = F.normalize(h2, dim=1)
+        
+        sim = torch.matmul(h1, h2.t()) / tau
 
-        sim = torch.exp(torch.matmul(h1, h2.t()) / tau)
 
         # positive and negative separation
         pos_sum = (sim * pos_mask).sum(dim=1)
@@ -116,7 +123,7 @@ class CG3Model(nn.Module):
 
 
         # reverse direction (HGCN → GCN)
-        sim_rev = torch.exp(torch.matmul(h2, h1.t()) / tau)
+        sim_rev = torch.matmul(h2, h1.t()) / tau
 
         pos_sum_rev = (sim_rev * pos_mask).sum(dim=1)
         neg_sum_rev = (sim_rev * neg_mask).sum(dim=1)
@@ -126,7 +133,10 @@ class CG3Model(nn.Module):
 
         sup_2 = pos_mean_rev / (neg_mean_rev + 1e-8)
 
-        sup_loss = -hp1 * torch.log(torch.cat([sup_1, sup_2]) + 1e-8).mean()
+        sup_loss = -hp1 * (
+            torch.log(sup_1 + 1e-8).mean() +
+            torch.log(sup_2 + 1e-8).mean()
+        )
         
         return unsup_loss + sup_loss
     
@@ -136,64 +146,80 @@ class CG3Model(nn.Module):
     def edge_loss(self, z_gcn, z_hgcn, edge_index):
 
         i, j = edge_index
+        num_nodes = z_gcn.size(0)
 
-        # ======================
-        # POSITIVE EDGES ONLY (paper exact)
-        # ======================
-        ei_gcn = z_gcn[i]
-        ej_hgcn = z_hgcn[j]
+        # -----------------------
+        # POSITIVE
+        # -----------------------
+        pos_score_1 = (z_gcn[i] * self.W_edge(z_hgcn[j])).sum(dim=1)
+        pos_score_2 = (z_hgcn[i] * self.W_edge(z_gcn[j])).sum(dim=1)
 
-        ei_hgcn = z_hgcn[i]
-        ej_gcn = z_gcn[j]
+        pos_loss = (
+            -torch.log(torch.sigmoid(pos_score_1) + 1e-8).mean()
+            -torch.log(torch.sigmoid(pos_score_2) + 1e-8).mean()
+        )
 
-        p1 = (ei_gcn * self.W_edge(ej_hgcn)).sum(dim=1)
-        p2 = (ei_hgcn * self.W_edge(ej_gcn)).sum(dim=1)
+        # -----------------------
+        # NEGATIVE SAMPLING
+        # -----------------------
+        neg_j = torch.randint(0, num_nodes, j.size(), device=j.device)
 
-        loss_1 = -torch.log(torch.sigmoid(p1) + 1e-8).mean()
-        loss_2 = -torch.log(torch.sigmoid(p2) + 1e-8).mean()
+        # avoid sampling true edges
+        mask = (neg_j == j)
+        while mask.any():
+            neg_j[mask] = torch.randint(0, num_nodes, (mask.sum(),), device=j.device)
+            mask = (neg_j == j)
 
-        return loss_1 + loss_2
-    
-    def compute_loss(self, z_gcn, z_hgcn, z, logits, data, train_idx, pos_mask, neg_mask):
+        neg_score_1 = (z_gcn[i] * self.W_edge(z_hgcn[neg_j])).sum(dim=1)
+        neg_score_2 = (z_hgcn[i] * self.W_edge(z_gcn[neg_j])).sum(dim=1)
+
+        neg_loss = (
+            -torch.log(1 - torch.sigmoid(neg_score_1) + 1e-8).mean()
+            -torch.log(1 - torch.sigmoid(neg_score_2) + 1e-8).mean()
+        )
+
+        return pos_loss + neg_loss
         
-        # ======================
-        # 1. Classification loss
-        # ======================
+    def compute_loss(self, z_gcn, z_hgcn, z, logits, data,
+                    train_idx, pos_mask, neg_mask,
+                    mode="full"):
+
         loss_cls = F.cross_entropy(
             logits[data.train_mask],
             data.y[data.train_mask]
         )
 
-        # ======================
-        # 2. Contrastive loss
-        # ======================
         loss_cl = self.contrastive_loss(
             z_gcn, z_hgcn,
             train_idx, pos_mask, neg_mask
         )
 
-        # ======================
-        # 3. Edge loss
-        # ======================
         loss_edge = self.edge_loss(
             z_gcn, z_hgcn,
             data.edge_index
         )
 
-        # ======================
-        # 4. HGCN smoothness
-        # ======================
         i, j = data.edge_index
         hgcn_smooth = ((z_hgcn[i] - z_hgcn[j])**2).sum(dim=1).mean()
 
         # ======================
-        # 5. Combine
+        # CONTROL MODES
         # ======================
-        loss = (
-            loss_cls
-            + loss_cl
-            + 0.4 * loss_edge
-            + 0.1 * hgcn_smooth
-        )
+        if mode == "cls":
+            return loss_cls
 
-        return loss
+        elif mode == "cls+cl":
+            return loss_cls + 0.05 * loss_cl
+
+        elif mode == "cls+cl+edge":
+            return loss_cls + 0.05 * loss_cl + 0.05 * loss_edge
+
+        elif mode == "full":
+            return (
+                loss_cls
+                + 0.15 * loss_cl
+                + 0.05 * loss_edge
+            )
+
+        else:
+            raise ValueError("Unknown loss mode")
