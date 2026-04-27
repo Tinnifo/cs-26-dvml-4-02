@@ -5,4 +5,5 @@ scikit-learn
 scipy
 tensorboard
 hydra-core
+hydra-joblib-launcher
 omegaconf

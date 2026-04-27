@@ -1,16 +1,17 @@
 #!/bin/bash
-# Complete sweep for a RunPod-style single-A100 SXM instance (no Slurm).
+# IceBerg-only sweep for a RunPod-style single-A100 SXM instance.
+# Drops vanilla and CG3 from sh/runpod.sh — keeps only `method=iceberg` runs
+# across the 6 backbones, 3 datasets, and both label-budget regimes.
+#
+# Total: 6 backbones x 1 method x 3 datasets x 10 budgets = 180 Hydra runs
+#        (= 900 training trials with 5 seeds).
+# Estimated runtime on an A100 SXM: ~1.5-2 hours.
 #
 # Target hardware:
 #   GPU            A100 SXM 1x
 #   vCPU           32 (AMD EPYC 7763)
 #   Memory         250 GB
 #   Container disk 20 GB
-#
-# Estimated runtime: ~3-5h for the full grid (~1950 training trials at
-# ~5-15s each on an A100). TensorBoard logs (~50 MB) and Hydra multirun
-# working dirs (~100 MB) sit comfortably inside the 20 GB container disk;
-# the .venv install dominates (~4 GB for torch + torch-geometric).
 
 set -e
 
@@ -20,16 +21,13 @@ cd "$(dirname "$0")/.."  # run from repo root regardless of cwd
 # Environment
 # ─────────────────────────────────────────────────────────────────────────────
 export CUDA_VISIBLE_DEVICES=0
-# 32 vCPU box. Hydra's joblib launcher runs n_jobs=8 training processes in
-# parallel (see conf/config.yaml), so per-process thread pools must stay small
-# enough that 8 * threads <= 32 vCPUs — otherwise OMP context switching eats
-# the parallelism benefit.
+# Per-process thread pools sized for n_jobs=8 parallel Hydra processes on a
+# 32-vCPU box (8 * 4 = 32). See conf/config.yaml hydra.launcher.n_jobs.
 export OMP_NUM_THREADS=4
 export MKL_NUM_THREADS=4
 export OPENBLAS_NUM_THREADS=4
 export NUMEXPR_MAX_THREADS=8
 
-# Activate venv if present; otherwise install into the container's Python.
 if [ -f .venv/bin/activate ]; then
     source .venv/bin/activate
 else
@@ -40,13 +38,13 @@ fi
 
 python - <<'PY'
 import torch
-print(f"[runpod] torch={torch.__version__}  cuda_available={torch.cuda.is_available()}")
+print(f"[runpod-iceberg] torch={torch.__version__}  cuda_available={torch.cuda.is_available()}")
 if torch.cuda.is_available():
-    print(f"[runpod] device={torch.cuda.get_device_name(0)}")
+    print(f"[runpod-iceberg] device={torch.cuda.get_device_name(0)}")
 PY
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sweeps — same four sections as sh/run.sh, no Slurm wrapping.
+# Sweeps — IceBerg only.
 # ─────────────────────────────────────────────────────────────────────────────
 declare -A PCT_BUDGETS=(
     [cora]="0.005,0.01,0.02,0.03,0.04"
@@ -54,36 +52,25 @@ declare -A PCT_BUDGETS=(
     [pubmed]="0.0005,0.001,0.0015,0.002,0.0025"
 )
 
-echo "[1/4] Standard backbones x {vanilla, iceberg} on per-class budgets..."
-python src/train.py --multirun +experiment=full_grid
-
-echo "[2/4] CG3 on per-class budgets..."
+echo "[1/2] IceBerg on per-class budgets..."
 python src/train.py --multirun \
-    model=cg3 method=cg3 \
+    model=gcn,gat,gin,sage,gt,diff \
+    method=iceberg \
     dataset=cora,citeseer,pubmed \
     label_strategy=per_class \
     label_strategy.budget=1,3,5,10,20
 
-echo "[3/4] Standard backbones x {vanilla, iceberg} on percentage budgets..."
+echo "[2/2] IceBerg on percentage budgets..."
 for ds in cora citeseer pubmed; do
     python src/train.py --multirun \
         model=gcn,gat,gin,sage,gt,diff \
-        method=vanilla,iceberg \
-        dataset=$ds \
-        label_strategy=percentage \
-        label_strategy.budget=${PCT_BUDGETS[$ds]}
-done
-
-echo "[4/4] CG3 on percentage budgets..."
-for ds in cora citeseer pubmed; do
-    python src/train.py --multirun \
-        model=cg3 method=cg3 \
+        method=iceberg \
         dataset=$ds \
         label_strategy=percentage \
         label_strategy.budget=${PCT_BUDGETS[$ds]}
 done
 
 echo
-echo "All sweeps complete. View TensorBoard:"
+echo "All IceBerg sweeps complete. View TensorBoard:"
 echo "  tensorboard --logdir runs --host 0.0.0.0 --port 6006"
 echo "(in the RunPod UI, expose TCP port 6006 to reach the dashboard)"
