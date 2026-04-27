@@ -133,8 +133,8 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
-# Data and models
-data/
+# Data and models (anchor to repo root so src/data/ isn't matched)
+/data/
 models/*.pth
 models/*.pt
 
