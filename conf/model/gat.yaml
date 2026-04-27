@@ -1,0 +1,6 @@
+name: gat
+arch:
+  _target_: src.models.gat.GAT
+  hidden_channels: 16
+  heads: 4
+  dropout: 0.5

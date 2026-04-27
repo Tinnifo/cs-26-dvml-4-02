@@ -2,4 +2,7 @@ torch
 torch-geometric
 numpy
 scikit-learn
-wandb
+scipy
+tensorboard
+hydra-core
+omegaconf

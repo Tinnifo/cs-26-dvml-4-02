@@ -1,5 +1,5 @@
 from collections import defaultdict
-from graph import Graph
+from .graph import Graph
 import numpy as np
 import scipy.sparse as sp
 

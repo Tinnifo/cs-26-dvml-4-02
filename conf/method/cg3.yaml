@@ -1,0 +1,13 @@
+# CG3 owns its model + multi-task loss. `cfg.model` is ignored — pair this
+# method with `model=cg3` for clarity.
+#
+# Staging matches CG3Method/train.py upstream:
+#   epoch <= warmup       -> mode="cls"      (classification only)
+#   epoch <= full_start   -> mode="cls+cl"   (cls + 0.05 * contrastive)
+#   epoch >  full_start   -> mode="full"     (cls + 0.15 * contrastive + 0.05 * edge)
+name: cg3
+lr: 0.005
+weight_decay: 5e-4
+hidden_dim: 64
+warmup: 30
+full_start: 80

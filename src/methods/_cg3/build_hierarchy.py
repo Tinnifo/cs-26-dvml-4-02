@@ -1,7 +1,7 @@
 import torch
 import numpy as np
-from coarsen import generate_hybrid_matching, create_coarse_graph
-from graph import Graph
+from .coarsen import generate_hybrid_matching, create_coarse_graph
+from .graph import Graph
 import scipy.sparse as sp
 from torch_geometric.utils import degree, add_self_loops
 

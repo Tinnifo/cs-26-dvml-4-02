@@ -1,124 +1,115 @@
 # GNN Benchmarking on Planetoid Datasets
 
-This project benchmarks various Graph Neural Network (GNN) models on Planetoid datasets (Cora, CiteSeer, PubMed), with integrated **Weights & Biases (W&B)** logging for experiment tracking.
+Hydra-driven pipeline for benchmarking GNN backbones (GCN, GAT, GIN, SAGE, GT, Diff) under two label-budget regimes (per-class N, global %) on Cora / CiteSeer / PubMed, with three training methods plug-in: `vanilla` (CE), `iceberg` (debiased self-training: pseudo-label + balanced softmax), `cg3` (contrastive graph-to-graph multi-task). All metrics log to TensorBoard.
 
+## 1. Setup
 
-!!!!!! Husk at skifter **bold** tekst i linje 36 i src/run_experiments: parser.add_argument('--wandb_project', type=str, default='**gnn-experiments-tinni**', help='WandB project name') til jeres EGET navn. Ellers Overwriter I mine eksperimenter.
+Python 3.10+ recommended.
 
-## 1. Prerequisites
-Ensure you have the following installed:
-- **Python 3.10** or newer.
-- **pip** (Python package installer).
-- **Docker** (optional, for containerized execution).
-
-## 2. Local Environment Setup
-
-Follow these steps to set up your local development environment from scratch:
-
-### Step 2.1: Create a Virtual Environment
-A virtual environment keeps the project's dependencies isolated.
 ```bash
-# Create the environment (using .venv as the name)
 python3 -m venv .venv
-```
-
-### Step 2.2: Activate the Virtual Environment
-- **Linux / macOS**:
-  ```bash
-  source .venv/bin/activate
-  ```
-- **Windows**:
-  ```bash
-  .venv\Scripts\activate
-  ```
-
-### Step 2.3: Install Dependencies
-Install all required libraries, including PyTorch, PyTorch Geometric, and W&B:
-```bash
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
----
+## 2. How experiments are configured
 
-## 3. Weights & Biases (W&B) Configuration
+Hydra composes one experiment from four config groups under `conf/`:
 
-Weights & Biases is used for real-time tracking, logging metrics, and visualizing results.
+| Group | Files | Purpose |
+|---|---|---|
+| `model/` | `gcn`, `gat`, `gin`, `sage`, `gt`, `diff`, `cg3` | Backbone architecture |
+| `method/` | `vanilla`, `iceberg`, `cg3` | Training recipe (loss, optional pseudo-labeling) |
+| `dataset/` | `cora`, `citeseer`, `pubmed` | Planetoid loader + dataset-specific percentage budgets |
+| `label_strategy/` | `per_class`, `percentage` | How the labeled set is sampled (uses `src/data/labels.py`) |
 
-### Step 3.1: Login to W&B
-If you don't have an account, sign up at [wandb.ai](https://wandb.ai). Then, log in via the terminal:
+The top-level `conf/config.yaml` sets shared knobs (`epochs=200`, `patience=50`, `seeds=[0..4]`, TensorBoard log dir).
+
+## 3. Running
+
+### Single experiment
 ```bash
-wandb login
+# vanilla GCN on Cora, 20 labels per class
+python src/train.py model=gcn method=vanilla dataset=cora label_strategy=per_class label_strategy.budget=20
+
+# GCN with the IceBerg trick — clean A/B test against the line above
+python src/train.py model=gcn method=iceberg dataset=cora label_strategy=per_class label_strategy.budget=20
+
+# Diff backbone + IceBerg (the paper's headline recipe)
+python src/train.py model=diff method=iceberg dataset=cora label_strategy.budget=20
+
+# CG3 — model knob ignored (the method bundles its own architecture)
+python src/train.py model=cg3 method=cg3 dataset=cora label_strategy.budget=20
+
+# Percentage label strategy
+python src/train.py model=gcn method=iceberg dataset=cora label_strategy=percentage label_strategy.budget=0.01
+
+# Disable TB logging if you just want stdout
+python src/train.py model=gcn method=vanilla dataset=cora tensorboard.enable=false
 ```
 
-### Step 3.2: Configure W&B Entity (Optional)
-To log to a specific W&B team or username (entity), set the following environment variable:
+### Sweeps (Hydra `--multirun`)
 ```bash
-export WANDB_ENTITY=your-team-name
-```
-Alternatively, you can pass this via command-line arguments (see below).
+# All standard backbones × {vanilla, iceberg} on Cora @ budgets {1,3,5,10,20}
+python src/train.py --multirun \
+    model=gcn,gat,gin,sage,gt,diff method=vanilla,iceberg \
+    dataset=cora label_strategy=per_class label_strategy.budget=1,3,5,10,20
 
----
-
-## 4. Running Experiments
-
-### Option A: Local Execution
-You can run a single model or a full suite of experiments directly from your terminal.
-
-- **Train a Single Model (e.g., GCN on Cora)**:
-  ```bash
-  python src/train.py --model GCN --dataset Cora --use_wandb
-  ```
-- **Run the Full Suite (All models, datasets, and budgets)**:
-  ```bash
-  python src/run_experiments.py --use_wandb
-  ```
-
-### Option B: Using Docker
-Docker allows you to run the experiments in a consistent, containerized environment.
-
-1. **Build the Docker Image**:
-   ```bash
-   docker build -t gnn-benchmark .
-   ```
-2. **Run the Container**:
-   To enable W&B logging inside the container, pass your **WANDB_API_KEY** and any other configuration (like `WANDB_ENTITY` or `WANDB_PROJECT`):
-   ```bash
-   docker run -e WANDB_API_KEY=your_api_key_here \
-              -e WANDB_ENTITY=your_entity_name \
-              gnn-benchmark
-   ```
-   *Note: Get your API key from [wandb.ai/settings](https://wandb.ai/settings).*
-
-### Option C: HPC Job Submission (Slurm)
-If you are using the **AAU AI-LAB HPC**, use the provided Slurm scripts in the `sh/` directory.
-
-Before submitting, export your W&B credentials so they are picked up by the compute nodes:
-```bash
-export WANDB_API_KEY=your_api_key_here
-export WANDB_ENTITY=your_team_name
-export WANDB_PROJECT=gnn-experiments
+# Use the bundled experiment recipe for the full grid
+python src/train.py --multirun +experiment=full_grid
 ```
 
-- **Submit a Specific Model Job**:
-  ```bash
-  sbatch sh/run_gcn.sh
-  ```
-- **Submit the Entire Experimental Matrix**:
-  ```bash
-  sbatch sh/run_combined.sh
-  ```
+### HPC (Slurm)
+```bash
+sbatch sh/run.sh
+```
 
----
+## 4. Adding a new model or method
 
-## 5. Monitoring and Logs
+**New model**: drop a `src/models/foo.py` that subclasses `BaseGNN` (`forward(x, edge_index) → logits`), re-export it in `src/models/__init__.py`, and add `conf/model/foo.yaml` with `_target_: src.models.foo.Foo`. It now works with `vanilla` and `iceberg`.
 
-- **W&B Dashboard**: Visit your project on [wandb.ai](https://wandb.ai) to see live training curves (Loss, Accuracy, F1-score) and compare different runs.
-- **Local Logs**: If using Slurm, check the `logs/` folder for `.out` files.
-- **Interactive Check**: Use `squeue --me` (for Slurm) to check the status of your submitted jobs.
+**New method**: drop a `src/methods/foo.py` that subclasses `BaseMethod` (implementing `build_model` and `train_step`; optionally `prepare`, `validate`, `predict_logits`). Add it to `METHOD_REGISTRY` in `src/train.py` and write `conf/method/foo.yaml` with at least `name: foo`.
 
-## Project Structure
-- `src/`: Core implementation files (`train.py`, `run_experiments.py`, and model architectures).
-- `sh/`: Slurm-compatible shell scripts for HPC submission.
-- `eval/`: Evaluation metrics and data utility functions.
-- `requirements.txt`: Python dependencies.
-- `Dockerfile`: Configuration for building the container image.
+## 5. Project structure
+
+```
+conf/                     # Hydra config groups (model, method, dataset, label_strategy, experiment)
+src/
+├── train.py              # Hydra entry point — single run or `--multirun` sweep
+├── models/               # BaseGNN + GCN, GAT, GIN, SAGE, GT, Diff
+├── methods/
+│   ├── base.py           # BaseMethod (build_model, prepare, train_step, evaluate, validate)
+│   ├── vanilla.py
+│   ├── iceberg.py
+│   ├── cg3.py            # wraps the bundled CG3 code below
+│   └── _cg3/             # CG3's bundled architecture (CG3Model, HGCN, hierarchy build)
+└── data/
+    ├── loader.py         # Planetoid loading + label-strategy dispatch
+    └── labels.py         # set_few_label_mask, set_budget_percent, set_seed
+sh/run.sh                 # Slurm wrapper around the Hydra multirun
+data/                     # Auto-created by PyG (Planetoid downloads)
+outputs/, multirun/       # Auto-created by Hydra (single-run / sweep working dirs)
+runs/                     # TensorBoard event files
+logs/                     # Slurm stdout/stderr
+```
+
+## 6. TensorBoard output
+
+Each Hydra run = one `(model, method, dataset, label_strategy, budget)` config evaluated across all seeds. Each run gets its own log directory:
+
+```
+runs/<dataset>/budget_<X>/<model>_<method>/
+```
+
+Inside that directory the writer logs:
+- per-epoch curves (downsampled to every `epoch_log_every` epochs): `seed_{seed}/{train_loss, val_acc, val_loss, ...}`
+- per-seed test metrics: `seed_{seed}/{test_accuracy, test_macro_precision, test_macro_recall, test_macro_f1, test_micro_f1, best_early_stop_metric}`
+- aggregate across seeds: `agg/{mean_accuracy, mean_macro_f1, std_accuracy, std_macro_f1, moe_accuracy, moe_macro_f1}`
+- HParams entry (model, method, dataset, budget vs. final metrics) for the **HParams** tab
+
+View:
+```bash
+tensorboard --logdir runs
+```
+
+In the TB UI, the directory layout means runs for the same `(dataset, budget)` are siblings, so you can multi-select them to overlay curves for the (model, method) ablation.

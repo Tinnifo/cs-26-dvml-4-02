@@ -1,0 +1,10 @@
+# IceBerg: balanced softmax on labeled + balanced softmax on pseudo-labeled
+# unlabeled nodes (mean-confidence threshold). lr / weight_decay match the
+# cs-26 vanilla setting so `model=X method=iceberg` is a clean A/B test
+# against `model=X method=vanilla` for any backbone X.
+name: iceberg
+lr: 0.01
+weight_decay: 5e-4
+lamda: 1.0
+warmup: 0
+beta: 0.0

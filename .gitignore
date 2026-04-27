@@ -141,8 +141,15 @@ models/*.pt
 # HPC Logs
 logs/
 
-# Weights & Biases
+# Weights & Biases (legacy)
 wandb/
+
+# Hydra working dirs
+outputs/
+multirun/
+
+# TensorBoard event files
+runs/
 
 # IDEs
 .idea/
