@@ -8,6 +8,7 @@ defaults:
   - method: vanilla
   - dataset: cora
   - label_strategy: per_class
+  - override hydra/launcher: joblib    # parallel multiruns (no effect on single runs)
 
 device: auto                  # auto | cpu | cuda
 data_root: data
@@ -16,6 +17,7 @@ epochs: 200
 patience: 50
 epoch_log_every: 10
 save_checkpoints: true        # writes best_state_seed{seed}.pt next to the TB events
+compile_model: true           # torch.compile(model) — JIT-fused forward, ~1.5-2x speedup
 
 tensorboard:
   enable: true
@@ -27,3 +29,5 @@ hydra:
   sweep:
     dir: multirun/${now:%Y-%m-%d_%H-%M-%S}
     subdir: ${dataset.name}/${model.name}_${method.name}/${label_strategy.name}_b${label_strategy.budget}
+  launcher:
+    n_jobs: 8                 # parallel Hydra jobs sharing the GPU; lower if VRAM tight

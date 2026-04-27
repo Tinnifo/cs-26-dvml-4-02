@@ -21,10 +21,12 @@ cd "$(dirname "$0")/.."  # run from repo root regardless of cwd
 # Environment
 # ─────────────────────────────────────────────────────────────────────────────
 export CUDA_VISIBLE_DEVICES=0
-export OMP_NUM_THREADS=8
-export MKL_NUM_THREADS=8
-export OPENBLAS_NUM_THREADS=8
-export NUMEXPR_MAX_THREADS=16
+# Per-process thread pools sized for n_jobs=8 parallel Hydra processes on a
+# 32-vCPU box (8 * 4 = 32). See conf/config.yaml hydra.launcher.n_jobs.
+export OMP_NUM_THREADS=4
+export MKL_NUM_THREADS=4
+export OPENBLAS_NUM_THREADS=4
+export NUMEXPR_MAX_THREADS=8
 
 if [ -f .venv/bin/activate ]; then
     source .venv/bin/activate

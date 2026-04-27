@@ -20,12 +20,14 @@ cd "$(dirname "$0")/.."  # run from repo root regardless of cwd
 # Environment
 # ─────────────────────────────────────────────────────────────────────────────
 export CUDA_VISIBLE_DEVICES=0
-# 32 vCPU, single training process — give torch a generous (but not maximal)
-# intra-op pool so we don't oversubscribe the small models.
-export OMP_NUM_THREADS=8
-export MKL_NUM_THREADS=8
-export OPENBLAS_NUM_THREADS=8
-export NUMEXPR_MAX_THREADS=16
+# 32 vCPU box. Hydra's joblib launcher runs n_jobs=8 training processes in
+# parallel (see conf/config.yaml), so per-process thread pools must stay small
+# enough that 8 * threads <= 32 vCPUs — otherwise OMP context switching eats
+# the parallelism benefit.
+export OMP_NUM_THREADS=4
+export MKL_NUM_THREADS=4
+export OPENBLAS_NUM_THREADS=4
+export NUMEXPR_MAX_THREADS=8
 
 # Activate venv if present; otherwise install into the container's Python.
 if [ -f .venv/bin/activate ]; then

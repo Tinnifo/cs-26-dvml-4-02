@@ -82,6 +82,12 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
 
     model = method.build_model(in_channels, num_classes, data=data).to(device)
     data = method.prepare(model, data)
+    if cfg.compile_model:
+        # `prepare` may swap params (e.g. CG3 replaces model.hgcn) — compile after.
+        try:
+            model = torch.compile(model)
+        except Exception as e:
+            print(f"  [warn] torch.compile failed ({e}); falling back to eager")
     optimizer = method.build_optimizer(model)
 
     best_metric = -float("inf")
@@ -109,7 +115,10 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
         model.load_state_dict(best_state)
         if checkpoint_path is not None:
             os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-            torch.save(best_state, checkpoint_path)
+            # Strip `_orig_mod.` prefix introduced by torch.compile so the
+            # checkpoint loads cleanly into either a compiled OR an eager model.
+            clean_state = {k.removeprefix("_orig_mod."): v for k, v in best_state.items()}
+            torch.save(clean_state, checkpoint_path)
 
     metrics = method.evaluate(model, data)
     return {
