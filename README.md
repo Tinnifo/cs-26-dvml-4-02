@@ -101,11 +101,10 @@ Each Hydra run = one `(model, method, dataset, label_strategy, budget)` config e
 runs/<dataset>/budget_<X>/<model>_<method>/
 ```
 
-Inside that directory the writer logs:
-- per-epoch curves (downsampled to every `epoch_log_every` epochs): `seed_{seed}/{train_loss, val_acc, val_loss, ...}`
-- per-seed test metrics: `seed_{seed}/{test_accuracy, test_macro_precision, test_macro_recall, test_macro_f1, test_micro_f1, best_early_stop_metric}`
-- aggregate across seeds: `agg/{mean_accuracy, mean_macro_f1, std_accuracy, std_macro_f1, moe_accuracy, moe_macro_f1}`
+Inside that directory:
+- TB scalars — per-epoch curves (downsampled to every `epoch_log_every` epochs) under `seed_{seed}/{train_loss, val_acc, val_loss, ...}`; per-seed test metrics under `seed_{seed}/{test_accuracy, test_macro_precision, test_macro_recall, test_macro_f1, test_micro_f1, best_early_stop_metric}`; aggregate across seeds under `agg/{mean_accuracy, mean_macro_f1, std_accuracy, std_macro_f1, moe_accuracy, moe_macro_f1}`
 - HParams entry (model, method, dataset, budget vs. final metrics) for the **HParams** tab
+- `best_state_seed{seed}.pt` — best-val checkpoint per seed (toggle via `save_checkpoints` in `conf/config.yaml`). Reload with `model.load_state_dict(torch.load(...))`
 
 View:
 ```bash

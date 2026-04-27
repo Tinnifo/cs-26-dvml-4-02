@@ -51,24 +51,30 @@ def build_method(cfg: DictConfig) -> BaseMethod:
     return METHOD_REGISTRY[name](cfg)
 
 
+def run_log_dir(cfg: DictConfig) -> str:
+    """`runs/<dataset>/budget_<X>/<model>_<method>/` — shared by TensorBoard
+    and the best-state checkpoint files so a downloaded run dir is
+    self-contained."""
+    return os.path.join(
+        cfg.tensorboard.log_dir,
+        cfg.dataset.name,
+        f"budget_{format_budget(cfg.label_strategy.budget)}",
+        f"{cfg.model.name}_{cfg.method.name}",
+    )
+
+
 def init_tensorboard(cfg: DictConfig):
     """One log dir per (dataset, budget, model, method) — same granularity as
     a single training run. All seeds for that config write into the same dir
     under `seed_{seed}/...` tags so they show as separate curves in TB."""
     from torch.utils.tensorboard import SummaryWriter
 
-    budget_str = format_budget(cfg.label_strategy.budget)
-    log_dir = os.path.join(
-        cfg.tensorboard.log_dir,
-        cfg.dataset.name,
-        f"budget_{budget_str}",
-        f"{cfg.model.name}_{cfg.method.name}",
-    )
-    return SummaryWriter(log_dir=log_dir)
+    return SummaryWriter(log_dir=run_log_dir(cfg))
 
 
 def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: int,
-                 num_classes: int, seed: int, device: torch.device):
+                 num_classes: int, seed: int, device: torch.device,
+                 checkpoint_path: str | None = None):
     from src.data.labels import set_seed
     set_seed(seed)
     data = base_data.clone().to(device)
@@ -101,6 +107,9 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
 
     if best_state is not None:
         model.load_state_dict(best_state)
+        if checkpoint_path is not None:
+            os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+            torch.save(best_state, checkpoint_path)
 
     metrics = method.evaluate(model, data)
     return {
@@ -137,10 +146,16 @@ def main(cfg: DictConfig) -> float:
     all_metrics = []
     every = max(1, int(cfg.epoch_log_every))
 
+    log_dir = run_log_dir(cfg)
     for seed in seeds:
         print(f"  [seed={seed}] training...")
+        ckpt_path = (
+            os.path.join(log_dir, f"best_state_seed{seed}.pt")
+            if cfg.save_checkpoints else None
+        )
         result = run_one_seed(cfg, method, base_data, loaded.in_channels,
-                              loaded.num_classes, int(seed), device)
+                              loaded.num_classes, int(seed), device,
+                              checkpoint_path=ckpt_path)
         m = result["metrics"]
         all_metrics.append(m)
         print(
