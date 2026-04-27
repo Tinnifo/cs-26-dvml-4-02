@@ -1,0 +1,3 @@
+# Per-class budget: select N labels from each class. Override budget on the CLI.
+name: per_class
+budget: 20

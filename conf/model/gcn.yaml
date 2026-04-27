@@ -1,0 +1,5 @@
+name: gcn
+arch:
+  _target_: src.models.gcn.GCN
+  hidden_channels: 16
+  dropout: 0.5

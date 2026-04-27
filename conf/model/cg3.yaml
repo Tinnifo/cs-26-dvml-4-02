@@ -1,0 +1,5 @@
+# Placeholder model config for `method=cg3`. The CG3 method ignores `arch`
+# and builds CG3Model itself (architecture and loss are coupled). This file
+# exists so `model=cg3` is a valid CLI selection — it just acts as a label.
+name: cg3
+arch: {}

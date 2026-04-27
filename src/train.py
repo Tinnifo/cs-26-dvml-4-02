@@ -1,207 +1,218 @@
+"""Hydra entry point: trains one (model, method, dataset, label_strategy, budget)
+configuration over a list of seeds and reports aggregated test metrics.
+
+Single run:
+  python src/train.py model=gcn method=iceberg dataset=cora label_strategy=per_class label_strategy.budget=20
+
+Sweep (full grid):
+  python src/train.py --multirun model=gcn,gat,gin,sage,gt,diff method=vanilla,iceberg \
+                       dataset=cora,citeseer,pubmed label_strategy=per_class \
+                       label_strategy.budget=1,3,5,10,20
+
+CG3 (model knob ignored — its method bundles its own architecture):
+  python src/train.py method=cg3 dataset=cora label_strategy=per_class label_strategy.budget=20
+
+Logging: TensorBoard. Each Hydra run writes to
+  <tensorboard.log_dir>/<dataset>/budget_<X>/<model>_<method>/
+View with `tensorboard --logdir runs/`.
+"""
+
+from __future__ import annotations
+
 import copy
-import torch
-import torch.nn.functional as F
-import numpy as np
-import argparse
-import sys
 import os
-import wandb
-import json
+import sys
 
-# Add parent directory to path to allow imports from eval
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import hydra
+import numpy as np
+import torch
+from omegaconf import DictConfig, OmegaConf
 
-from torch_geometric.datasets import Planetoid
-from src.models import GCN, GAT, GraphSAGE, GIN, GraphTransformer
-from eval.evaluation import evaluate
-from eval.Utils import set_few_label_mask, set_budget_percent, set_seed
+# Ensure project root is on the path so `src/` resolves.
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-def get_model(name, num_features, num_classes, hidden_dim, dropout=0.5):
-    if name == "GCN":
-        return GCN(num_features, hidden_dim, num_classes, dropout=dropout)
-    elif name == "GAT":
-        return GAT(num_features, hidden_dim, num_classes, dropout=dropout)
-    elif name == "GIN":
-        return GIN(num_features, hidden_dim, num_classes, dropout=dropout)
-    elif name == "SAGE":
-        return GraphSAGE(num_features, hidden_dim, num_classes, dropout=dropout)
-    elif name == "GT":
-        return GraphTransformer(num_features, hidden_dim, num_classes, dropout=dropout)
-    else:
-        raise ValueError(f"Unknown model: {name}")
+from src.data.loader import apply_label_strategy, format_budget, load_dataset
+from src.methods import CG3Method, IcebergMethod, VanillaMethod
+from src.methods.base import BaseMethod
 
-def main():
-    parser = argparse.ArgumentParser(description='Train GNN models on Planetoid datasets')
-    parser.add_argument('--dataset', type=str, default='Cora', choices=['Cora', 'CiteSeer', 'PubMed'], help='Dataset name')
-    parser.add_argument('--model', type=str, default='GCN', choices=['GCN', 'GAT', 'GIN', 'SAGE', 'GT'], help='Model name')
-    parser.add_argument('--budget', type=float, default=20, help='Number of labels per class OR fraction of total nodes')
-    parser.add_argument('--epochs', type=int, default=200, help='Number of training epochs')
-    parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
-    parser.add_argument('--hidden_dim', type=int, default=16, help='Hidden dimension')
-    parser.add_argument('--dropout', type=float, default=0.5, help='Dropout rate')
-    parser.add_argument('--weight_decay', type=float, default=5e-4, help='Weight decay')
-    parser.add_argument('--patience', type=int, default=50, help='Early stopping patience')
-    parser.add_argument('--seeds', type=int, nargs='+', default=[0, 1, 2, 3, 4], help='Random seeds for experiments')
-    parser.add_argument('--use_wandb', action='store_true', help='Use Weights & Biases for logging')
-    parser.add_argument('--wandb_project', type=str, default='gnn-experiments', help='WandB project name')
-    parser.add_argument('--wandb_entity', type=str, default='cs-26-dvml-4-02', help='WandB entity (team or username)')
-    parser.add_argument('--config', type=str, default=None, help='Path to JSON config file')
-    args = parser.parse_args()
+METHOD_REGISTRY = {
+    "vanilla": VanillaMethod,
+    "iceberg": IcebergMethod,
+    "cg3": CG3Method,
+}
 
-    import datetime
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Override args with config file if provided
-    if args.config:
-        with open(args.config, 'r') as f:
-            config_data = json.load(f)
-            for k, v in config_data.items():
-                if hasattr(args, k):
-                    setattr(args, k, v)
+def build_method(cfg: DictConfig) -> BaseMethod:
+    name = cfg.method.name
+    if name not in METHOD_REGISTRY:
+        raise ValueError(f"Unknown method '{name}'. Add it to METHOD_REGISTRY in src/train.py.")
+    return METHOD_REGISTRY[name](cfg)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
 
-    budget_str = f"{int(args.budget)}" if args.budget >= 1 else f"{args.budget*100:.1f}%"
-    print(f"\n========== DATASET: {args.dataset} | MODEL: {args.model} | BUDGET: {budget_str} ==========")
+def init_tensorboard(cfg: DictConfig):
+    """One log dir per (dataset, budget, model, method) — same granularity as
+    a single training run. All seeds for that config write into the same dir
+    under `seed_{seed}/...` tags so they show as separate curves in TB."""
+    from torch.utils.tensorboard import SummaryWriter
 
-    if args.use_wandb:
-        run_name = f"{args.model}_{args.dataset}_budget{budget_str}_{timestamp}"
-        
-        # Determine budget type
-        budget_type = "per-class" if args.budget >= 1 else "percentage"
-        
-        # Get dataset specific budgets if available in config_data
-        dataset_budgets = []
-        if args.config:
-            with open(args.config, 'r') as f:
-                config_data = json.load(f)
-                dataset_budgets = config_data.get('dataset_budgets', {}).get(args.dataset, [])
+    budget_str = format_budget(cfg.label_strategy.budget)
+    log_dir = os.path.join(
+        cfg.tensorboard.log_dir,
+        cfg.dataset.name,
+        f"budget_{budget_str}",
+        f"{cfg.model.name}_{cfg.method.name}",
+    )
+    return SummaryWriter(log_dir=log_dir)
 
-        wandb.init(
-            project=args.wandb_project,
-            entity=args.wandb_entity,
-            name=run_name,
-            config={
-                **vars(args),
-                "budget_type": budget_type,
-                "dataset_budgets": dataset_budgets
-            }
-        )
 
-    # Use a consistent data directory
-    dataset = Planetoid(root='data', name=args.dataset)
-    base_data = dataset[0].to(device)
+def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: int,
+                 num_classes: int, seed: int, device: torch.device):
+    from src.data.labels import set_seed
+    set_seed(seed)
+    data = base_data.clone().to(device)
+    data = apply_label_strategy(data, cfg.label_strategy.name, cfg.label_strategy.budget, seed)
 
-    all_metrics = []
+    model = method.build_model(in_channels, num_classes, data=data).to(device)
+    data = method.prepare(model, data)
+    optimizer = method.build_optimizer(model)
 
-    for seed in args.seeds:
-        set_seed(seed)
-        data = base_data.clone()
-        
-        # Handle both per-class budget and percentage budget
-        if args.budget >= 1:
-            data = set_few_label_mask(data, int(args.budget), seed)
-        else:
-            data = set_budget_percent(data, args.budget, seed)
+    best_metric = -float("inf")
+    best_state = None
+    counter = 0
+    epoch_log = []
 
-        model = get_model(args.model, dataset.num_features, dataset.num_classes, args.hidden_dim, args.dropout).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    for epoch in range(1, cfg.epochs + 1):
+        train_out = method.train_step(model, data, optimizer, epoch)
+        val_out = method.validate(model, data)
+        epoch_log.append({"epoch": epoch, **train_out, **val_out})
 
-        # Training
-        best_val_acc = 0
-        best_state = None
-        counter = 0
-        has_val = hasattr(data, 'val_mask') and data.val_mask.sum() > 0
-
-        for epoch in range(args.epochs):
-            # --- 1. Training Phase ---
-            model.train()
-            optimizer.zero_grad()
-            out = model(data.x, data.edge_index)
-
-            # Calculate standard training loss for backprop
-            train_loss = F.cross_entropy(
-                out[data.train_mask],
-                data.y[data.train_mask]
-            )
-            train_loss.backward()
-            optimizer.step()
-
-            # --- 2. Evaluation Phase (Overfitting Check) ---
-            model.eval()
-            with torch.no_grad():
-                out_eval = model(data.x, data.edge_index)
-                pred = out_eval.argmax(dim=1)
-
-                train_acc = (pred[data.train_mask] == data.y[data.train_mask]).float().mean().item()
-
-                log_dict = {
-                    f"seed_{seed}/epoch": epoch,
-                    f"seed_{seed}/train_loss": train_loss.item(),
-                    f"seed_{seed}/train_acc": train_acc
-                }
-
-                if has_val:
-                    val_loss = F.cross_entropy(
-                        out_eval[data.val_mask],
-                        data.y[data.val_mask]
-                    ).item()
-                    val_acc = (pred[data.val_mask] == data.y[data.val_mask]).float().mean().item()
-
-                    log_dict.update({
-                        f"seed_{seed}/val_loss": val_loss,
-                        f"seed_{seed}/val_acc": val_acc
-                    })
-
-                    # Early stopping + best-model checkpoint
-                    if val_acc > best_val_acc:
-                        best_val_acc = val_acc
-                        best_state = copy.deepcopy(model.state_dict())
-                        counter = 0
-                    else:
-                        counter += 1
-
-                if args.use_wandb:
-                    wandb.log(log_dict)
-
-                if has_val and counter >= args.patience:
-                    print(f"Seed {seed}: Early stopping at epoch {epoch}")
+        early = val_out.get("early_stop_metric")
+        if early is not None:
+            if early > best_metric:
+                best_metric = float(early)
+                best_state = copy.deepcopy(model.state_dict())
+                counter = 0
+            else:
+                counter += 1
+                if counter >= cfg.patience:
                     break
 
-        # Restore best weights before test evaluation
-        if best_state is not None:
-            model.load_state_dict(best_state)
+    if best_state is not None:
+        model.load_state_dict(best_state)
 
-        metrics = evaluate(model, data)
-        all_metrics.append(metrics)
-        
-        if args.use_wandb:
-            wandb.log({
-                f"seed_{seed}/accuracy": metrics[0],
-                f"seed_{seed}/macro_f1": metrics[3]
-            })
-
-    all_metrics = np.array(all_metrics)
-    mean_metrics = np.mean(all_metrics, axis=0)
-    std_metrics = np.std(all_metrics, axis=0)
-
-    results = {
-        "mean_accuracy": mean_metrics[0],
-        "std_accuracy": std_metrics[0],
-        "mean_macro_f1": mean_metrics[3],
-        "std_macro_f1": std_metrics[3],
+    metrics = method.evaluate(model, data)
+    return {
+        "metrics": metrics,
+        "epoch_log": epoch_log,
+        "best_metric": best_metric,
+        "stopped_at_epoch": epoch_log[-1]["epoch"] if epoch_log else 0,
     }
 
-    if args.use_wandb:
-        wandb.log(results)
-        wandb.finish()
+
+@hydra.main(config_path="../conf", config_name="config", version_base=None)
+def main(cfg: DictConfig) -> float:
+    print(OmegaConf.to_yaml(cfg))
+
+    if cfg.device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(cfg.device)
+    print(f"[train] device={device}")
+
+    loaded = load_dataset(
+        cfg.dataset.name,
+        root=cfg.data_root,
+        normalize_features=cfg.dataset.normalize_features,
+    )
+    base_data = loaded.data
+    method = build_method(cfg)
+
+    writer = None
+    if cfg.tensorboard.enable:
+        writer = init_tensorboard(cfg)
+
+    seeds = list(cfg.seeds)
+    all_metrics = []
+    every = max(1, int(cfg.epoch_log_every))
+
+    for seed in seeds:
+        print(f"  [seed={seed}] training...")
+        result = run_one_seed(cfg, method, base_data, loaded.in_channels,
+                              loaded.num_classes, int(seed), device)
+        m = result["metrics"]
+        all_metrics.append(m)
+        print(
+            f"  [seed={seed}] stopped@{result['stopped_at_epoch']} "
+            f"acc={m[0]:.4f} macroF1={m[3]:.4f}"
+        )
+
+        if writer is not None:
+            for entry in result["epoch_log"]:
+                if entry["epoch"] % every != 0 and entry["epoch"] != result["stopped_at_epoch"]:
+                    continue
+                step = int(entry["epoch"])
+                for k, v in entry.items():
+                    if k == "epoch":
+                        continue
+                    if isinstance(v, (int, float)):
+                        writer.add_scalar(f"seed_{seed}/{k}", float(v), step)
+            # Per-seed test metrics — single point each, step=0.
+            writer.add_scalar(f"seed_{seed}/test_accuracy", float(m[0]), 0)
+            writer.add_scalar(f"seed_{seed}/test_macro_precision", float(m[1]), 0)
+            writer.add_scalar(f"seed_{seed}/test_macro_recall", float(m[2]), 0)
+            writer.add_scalar(f"seed_{seed}/test_macro_f1", float(m[3]), 0)
+            writer.add_scalar(f"seed_{seed}/test_micro_f1", float(m[4]), 0)
+            writer.add_scalar(f"seed_{seed}/best_early_stop_metric", float(result["best_metric"]), 0)
+
+    arr = np.array(all_metrics)
+    mean = arr.mean(axis=0)
+    std = arr.std(axis=0)
+    n = len(seeds)
+    moe_acc = 1.96 * std[0] / np.sqrt(n)
+    moe_f1 = 1.96 * std[3] / np.sqrt(n)
 
     print(
-        f"Results for {args.model} on {args.dataset} (Budget {budget_str}):\n"
-        f"Accuracy:  {mean_metrics[0]:.4f} ± {std_metrics[0]:.4f}\n"
-        f"Macro F1:  {mean_metrics[3]:.4f} ± {std_metrics[3]:.4f}"
+        f"[summary {cfg.model.name}/{cfg.method.name} {cfg.dataset.name} "
+        f"b={format_budget(cfg.label_strategy.budget)}] "
+        f"acc={mean[0]:.4f}+-{moe_acc:.4f}  macroF1={mean[3]:.4f}+-{moe_f1:.4f}"
     )
+
+    if writer is not None:
+        # Aggregate across seeds.
+        writer.add_scalar("agg/mean_accuracy", float(mean[0]), 0)
+        writer.add_scalar("agg/mean_macro_f1", float(mean[3]), 0)
+        writer.add_scalar("agg/std_accuracy", float(std[0]), 0)
+        writer.add_scalar("agg/std_macro_f1", float(std[3]), 0)
+        writer.add_scalar("agg/moe_accuracy", float(moe_acc), 0)
+        writer.add_scalar("agg/moe_macro_f1", float(moe_f1), 0)
+
+        # HParams entry — enables TB's HParams tab for cross-run comparison
+        # (model/method/dataset/budget vs final metrics).
+        writer.add_hparams(
+            {
+                "model": str(cfg.model.name),
+                "method": str(cfg.method.name),
+                "dataset": str(cfg.dataset.name),
+                "label_strategy": str(cfg.label_strategy.name),
+                "budget": float(cfg.label_strategy.budget),
+                "epochs": int(cfg.epochs),
+                "patience": int(cfg.patience),
+                "seeds": str(list(cfg.seeds)),
+            },
+            {
+                "hparam/mean_accuracy": float(mean[0]),
+                "hparam/mean_macro_f1": float(mean[3]),
+                "hparam/moe_accuracy": float(moe_acc),
+            },
+            run_name=".",
+        )
+        writer.flush()
+        writer.close()
+
+    return float(mean[0])
+
 
 if __name__ == "__main__":
     main()

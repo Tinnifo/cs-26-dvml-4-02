@@ -1,0 +1,28 @@
+# Top-level Hydra config. Defaults compose into one (model, method, dataset,
+# label_strategy) experiment. Override on the CLI:
+#   python src/train.py model=gat method=iceberg dataset=pubmed label_strategy.budget=10
+
+defaults:
+  - _self_
+  - model: gcn
+  - method: vanilla
+  - dataset: cora
+  - label_strategy: per_class
+
+device: auto                  # auto | cpu | cuda
+data_root: data
+seeds: [0, 1, 2, 3, 4]
+epochs: 200
+patience: 50
+epoch_log_every: 10
+
+tensorboard:
+  enable: true
+  log_dir: runs               # one subdir per (dataset, budget, model, method)
+
+hydra:
+  run:
+    dir: outputs/${dataset.name}/${model.name}_${method.name}/${label_strategy.name}_b${label_strategy.budget}/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${dataset.name}/${model.name}_${method.name}/${label_strategy.name}_b${label_strategy.budget}

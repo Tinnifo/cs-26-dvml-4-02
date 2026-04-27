@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
-from hgcn import HGCN_PyG as HGCN
+from .hgcn import HGCN_PyG as HGCN
 
 
 class CG3Model(nn.Module):    
