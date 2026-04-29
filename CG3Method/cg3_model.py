@@ -26,7 +26,7 @@ class CG3Model(nn.Module):
             self.W_edge = nn.Linear(hidden_dim, hidden_dim, bias=False)
 
             # FIXED paper fusion
-            self.alpha = 0.8
+            self.alpha = nn.Parameter(torch.tensor(0.8))
 
             # classifier
             self.classifier = nn.Linear(hidden_dim, num_classes)
@@ -78,10 +78,10 @@ class CG3Model(nn.Module):
 
         sim = torch.exp(torch.matmul(z_gcn, z_hgcn.t()) / tau)
 
+        neg = sim.mean(dim=1)
         pos = sim.diag()
-        denom = sim.sum(dim=1) - pos + 1e-8   # exclude self
 
-        unsup_1 = pos / denom
+        unsup_1 = pos / (neg + 1e-8)
 
 
         sim_rev = torch.exp(torch.matmul(z_hgcn, z_gcn.t()) / tau)
@@ -217,7 +217,7 @@ class CG3Model(nn.Module):
         elif mode == "full":
             return (
                 loss_cls
-                + 0.15 * loss_cl
+                + 0.25 * loss_cl
                 + 0.05 * loss_edge
             )
 

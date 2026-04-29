@@ -4,7 +4,7 @@ from build_hierarchy_from_coarsen import normalize_edge_index
 import copy
 
 
-def train(model, data, epochs=200, lr=0.005):
+def train(model, data, epochs=200, lr=0.01):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -24,11 +24,11 @@ def train(model, data, epochs=200, lr=0.005):
     
     best_acc = 0    
     best_state = None
-    patience = 20
+    patience = 50
     counter = 0
     warmup = 30
     contrastive_start = 30
-    full_start = 80
+    full_start = 60
 
     for epoch in range(epochs):
 
