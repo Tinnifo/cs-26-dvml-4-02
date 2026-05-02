@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class Graph(object):
     ''' Note: adj_list shows each edge twice. So edge_num is really two times of edge number for undirected graph.'''
 

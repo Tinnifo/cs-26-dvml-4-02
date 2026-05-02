@@ -1,145 +1,75 @@
+from __future__ import division
+from __future__ import print_function
+
+import time
+import numpy as np
 import torch
-import torch.nn.functional as F
-from build_hierarchy_from_coarsen import normalize_edge_index
+
+from utils import *
+from models import HGCN
+from coarsen import *
+from config import FLAGS
 import copy
+import pickle as pkl
 
 
-def train(model, data, epochs=200, lr=0.01):
+def HGCN_Model(placeholders, paras):
+    # Settings (overrides via paras)
+    FLAGS.dataset = paras['dataset']
+    FLAGS.model = 'hgcn'
+    FLAGS.seed1 = 123
+    FLAGS.seed2 = 123
+    FLAGS.hidden = 32
+    FLAGS.node_wgt_embed_dim = 5
+    FLAGS.weight_decay = paras['weight_decay']
+    FLAGS.coarsen_level = 4
+    FLAGS.max_node_wgt = 50
+    FLAGS.channel_num = 4
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # Set random seed
+    seed1 = FLAGS.seed1
+    seed2 = FLAGS.seed2
+    np.random.seed(seed1)
+    torch.manual_seed(seed2)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed2)
 
-    model = model.to(device)
-    data = data.to(device)
+    # Load data
+    adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask = load_data(FLAGS.dataset)
 
-    edge_index, edge_weight = normalize_edge_index(
-            data.edge_index,
-            data.num_nodes,
-            data.edge_weight
-        )
+    # Some preprocessing
+    features = preprocess_features(features)
+    support = [preprocess_adj(adj)]
+    num_supports = 1
+    model_func = HGCN
 
-    data.edge_index = edge_index
-    data.edge_weight = edge_weight
-    
-    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
-    
-    best_acc = 0    
-    best_state = None
-    patience = 50
-    counter = 0
-    warmup = 30
-    contrastive_start = 30
-    full_start = 60
+    graph, mapping = read_graph_from_adj(adj, FLAGS.dataset)
+    print('total nodes:', graph.node_num)
 
-    for epoch in range(epochs):
+    # Step-1: Graph Coarsening.
+    original_graph = graph
+    transfer_list = []
+    adj_list = [copy.copy(graph.A)]
+    node_wgt_list = [copy.copy(graph.node_wgt)]
+    for i in range(FLAGS.coarsen_level):
+        match, coarse_graph_size = generate_hybrid_matching(FLAGS.max_node_wgt, graph)
+        coarse_graph = create_coarse_graph(graph, match, coarse_graph_size)
+        transfer_list.append(copy.copy(graph.C))
+        graph = coarse_graph
+        adj_list.append(copy.copy(graph.A))
+        node_wgt_list.append(copy.copy(graph.node_wgt))
+        print('There are %d nodes in the %d coarsened graph' % (graph.node_num, i + 1))
 
-        model.train()
-        opt.zero_grad()
+    print("\n")
+    print('layer_index ', 1)
+    print('input shape:   ', features[-1])
 
-        z_gcn, z_hgcn, z, logits = model(
-            data.x,
-            data.edge_index,
-            data.edge_weight
-        )
-        z_gcn = F.normalize(z_gcn, dim=1)
-        z_hgcn = F.normalize(z_hgcn, dim=1)
-        z = F.normalize(z, dim=1)
-        #Contrastive learning WITHOUT normalization → cosine similarity becomes unstable → ~2–3% drop easily
+    for i in range(len(adj_list)):
+        adj_list[i] = [preprocess_adj(adj_list[i])]
 
-        train_idx = data.train_mask.nonzero(as_tuple=True)[0]
-        labels = data.y[train_idx]
+    return model_func(placeholders, input_dim=features[2][1], logging=True,
+                      transfer_list=transfer_list, adj_list=adj_list, node_wgt_list=node_wgt_list)
 
-        pos_mask = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
-        pos_mask.fill_diagonal_(0)
 
-        neg_mask = 1 - pos_mask
-        neg_mask.fill_diagonal_(0)   # <-- ADD THIS
-                
-        
-        if epoch < warmup:
-            mode = "cls"
-        elif epoch < full_start:
-            mode = "cls+cl"
-        else:
-            mode = "full"
-
-        loss = model.compute_loss(
-            z_gcn, z_hgcn, z, logits,
-            data, train_idx, pos_mask, neg_mask,
-            mode=mode
-        )
-
-        loss.backward()
-        opt.step()
-
-        # accuracy
-        model.eval()
-        with torch.no_grad():
-            _, _, _, logits = model(
-                data.x,
-                data.edge_index,
-                data.edge_weight
-            )
-
-            pred = logits.argmax(dim=1)
-
-            val_acc = (pred[data.val_mask] == data.y[data.val_mask]).float().mean()
-            test_acc = (pred[data.test_mask] == data.y[data.test_mask]).float().mean()
-
-        print(f"{epoch} | loss {loss:.4f} | val {val_acc:.4f} | test {test_acc:.4f}")
-        if val_acc > best_acc:
-            best_state = copy.deepcopy(model.state_dict())
-            best_acc = val_acc
-            counter = 0
-        else:
-            counter += 1
-
-        if counter >= patience:
-            print(f"Early stopping at epoch {epoch}")
-            break
-    if best_state is not None:
-        model.load_state_dict(best_state)
-        model.eval()
-
-        with torch.no_grad():
-            _, _, _, logits = model(
-                data.x,
-                data.edge_index,
-                data.edge_weight
-            )
-
-            pred = logits.argmax(dim=1)
-            test_acc = (pred[data.test_mask] == data.y[data.test_mask]).float().mean()
-
-        print("FINAL TEST ACC:", test_acc.item())
-        
-def train_gcn(model, data, epochs=200, lr=0.01):
-
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
-    data = data.to(device)
-
-    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
-
-    for epoch in range(epochs):
-
-        model.train()
-        opt.zero_grad()
-
-        logits = model(data.x, data.edge_index, data.edge_weight)
-
-        loss = F.cross_entropy(
-            logits[data.train_mask],
-            data.y[data.train_mask]
-        )
-
-        loss.backward()
-        opt.step()
-
-        model.eval()
-        with torch.no_grad():
-            logits = model(data.x, data.edge_index, data.edge_weight)
-            pred = logits.argmax(dim=1)
-
-            acc = (pred[data.test_mask] == data.y[data.test_mask]).float().mean()
-
-        print(f"[GCN] {epoch} | loss {loss:.4f} | acc {acc:.4f}")
+if __name__ == "__main__":
+    HGCNModel = HGCN_Model(placeholders, paras)

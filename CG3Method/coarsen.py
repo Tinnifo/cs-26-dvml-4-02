@@ -1,20 +1,8 @@
 from collections import defaultdict
 from graph import Graph
 import numpy as np
-import scipy.sparse as sp
+from utils import cmap2C
 
-def cmap2C(cmap):
-    node_num = len(cmap)
-    i_arr = []
-    j_arr = []
-    data_arr = []
-
-    for i in range(node_num):
-        i_arr.append(i)
-        j_arr.append(cmap[i])
-        data_arr.append(1)
-
-    return sp.csr_matrix((data_arr, (i_arr, j_arr)))
 
 def normalized_adj_wgt(graph):
     adj_wgt = graph.adj_wgt
@@ -33,7 +21,7 @@ def normalized_adj_wgt(graph):
 ###############################################
 
 def generate_hybrid_matching(max_node_wgt, graph):
-    '''Generate matchings using the hybrid method. It changes the cmap in graph object, 
+    '''Generate matchings using the hybrid method. It changes the cmap in graph object,
     return groups array and coarse_graph_size.'''
     node_num = graph.node_num
     adj_list = graph.adj_list  # big array for neighbors.
@@ -47,7 +35,6 @@ def generate_hybrid_matching(max_node_wgt, graph):
 
     # SEM: structural equivalence matching.
     jaccard_idx_preprocess(graph, matched, groups)
-    #print("# groups have perfect jaccard idx (1.0): %d" % len(groups))
     degree = [adj_idx[i + 1] - adj_idx[i] for i in range(0, node_num)]
 
     sorted_idx = np.argsort(degree)
@@ -64,7 +51,7 @@ def generate_hybrid_matching(max_node_wgt, graph):
             if ((not matched[neigh]) and max_wgt < curr_wgt and node_wgt[idx] + node_wgt[neigh] <= max_node_wgt):
                 max_idx = neigh
                 max_wgt = curr_wgt
-        # it might happen that max_idx is idx, which means cannot find a match for the node. 
+        # it might happen that max_idx is idx, which means cannot find a match for the node.
         matched[idx] = matched[max_idx] = True
         if idx == max_idx:
             groups.append([idx])
@@ -126,8 +113,7 @@ def create_coarse_graph(graph, groups, coarse_graph_size):
             istart = adj_idx[merged_node]
             iend = adj_idx[merged_node + 1]
             for j in range(istart, iend):
-                k = cmap[adj_list[
-                    j]]  # adj_list[j] is the neigh of v; k is the new mapped id of adj_list[j] in coarse graph.
+                k = cmap[adj_list[j]]
                 if k not in neigh_dict:  # add new neigh
                     coarse_adj_list[nedges] = k
                     coarse_adj_wgt[nedges] = adj_wgt[j]
@@ -135,7 +121,6 @@ def create_coarse_graph(graph, groups, coarse_graph_size):
                     nedges += 1
                 else:  # increase weight to the existing neigh
                     coarse_adj_wgt[neigh_dict[k]] += adj_wgt[j]
-                # add weights to the degree. For now, we retain the loop. 
                 coarse_degree[coarse_node_idx] += adj_wgt[j]
 
         coarse_node_idx += 1
@@ -144,7 +129,7 @@ def create_coarse_graph(graph, groups, coarse_graph_size):
     coarse_graph.edge_num = nedges
 
     coarse_graph.resize_adj(nedges)
-    C = cmap2C(cmap)  # construct the matching matrix.
+    C = cmap2C(cmap)
     graph.C = C
     coarse_graph.A = C.transpose().dot(graph.A).dot(C)
     return coarse_graph
