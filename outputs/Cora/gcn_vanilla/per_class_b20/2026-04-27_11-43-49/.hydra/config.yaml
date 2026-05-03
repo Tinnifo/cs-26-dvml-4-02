@@ -1,0 +1,38 @@
+device: auto
+data_root: data
+seeds:
+- 0
+- 1
+- 2
+- 3
+- 4
+epochs: 200
+patience: 50
+epoch_log_every: 10
+save_checkpoints: true
+compile_model: true
+tensorboard:
+  enable: true
+  log_dir: runs
+model:
+  name: gcn
+  arch:
+    _target_: src.models.gcn.GCN
+    hidden_channels: 16
+    dropout: 0.5
+method:
+  name: vanilla
+  lr: 0.01
+  weight_decay: 0.0005
+dataset:
+  name: Cora
+  normalize_features: false
+  percentage_budgets:
+  - 0.005
+  - 0.01
+  - 0.02
+  - 0.03
+  - 0.04
+label_strategy:
+  name: per_class
+  budget: 20
