@@ -1,5 +1,14 @@
 #!/bin/bash
-# Complete sweep for a RunPod-style single-A100 SXM instance (no Slurm).
+# RunPod setup + sweep launcher for a single-A100 SXM instance (no Slurm).
+#
+# Usage:
+#   sh/runpod.sh                       # run the hardcoded full sweep (default)
+#   sh/runpod.sh full_grid             # run a single experiment yaml
+#   sh/runpod.sh full_grid gnn_full_sweep   # run multiple experiment yamls
+#   sh/runpod.sh -- model=gcn dataset=cora  # raw Hydra overrides after `--`
+#
+# Experiment names refer to files in conf/experiment/*.yaml (without the
+# extension). They are passed as `+experiment=<name>` to src/train.py.
 #
 # Target hardware:
 #   GPU            A100 SXM 1x
@@ -50,7 +59,56 @@ if torch.cuda.is_available():
 PY
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sweeps — same four sections as sh/run.sh, no Slurm wrapping.
+# Dispatch
+#   - no args  → run the hardcoded full sweep below
+#   - args     → treat each arg as an experiment yaml name (conf/experiment/<name>.yaml)
+#                or, after `--`, as raw Hydra overrides forwarded to a single multirun
+# ─────────────────────────────────────────────────────────────────────────────
+if [ "$#" -gt 0 ]; then
+    # Split args into experiment names and (optional) raw overrides after `--`.
+    experiments=()
+    extra_overrides=()
+    seen_sep=0
+    for arg in "$@"; do
+        if [ "$arg" = "--" ]; then
+            seen_sep=1
+            continue
+        fi
+        if [ "$seen_sep" -eq 0 ]; then
+            experiments+=("$arg")
+        else
+            extra_overrides+=("$arg")
+        fi
+    done
+
+    if [ "${#experiments[@]}" -eq 0 ] && [ "${#extra_overrides[@]}" -gt 0 ]; then
+        echo "[runpod] raw multirun: ${extra_overrides[*]}"
+        python src/train.py --multirun "${extra_overrides[@]}"
+    else
+        n=${#experiments[@]}
+        i=1
+        for exp in "${experiments[@]}"; do
+            yaml="conf/experiment/${exp}.yaml"
+            if [ ! -f "$yaml" ]; then
+                echo "[runpod] error: experiment yaml not found: $yaml" >&2
+                echo "Available experiments:" >&2
+                ls conf/experiment/ >&2
+                exit 1
+            fi
+            echo "[$i/$n] +experiment=$exp ${extra_overrides[*]}"
+            python src/train.py --multirun "+experiment=$exp" "${extra_overrides[@]}"
+            i=$((i + 1))
+        done
+    fi
+
+    echo
+    echo "Done. View TensorBoard:"
+    echo "  tensorboard --logdir runs --host 0.0.0.0 --port 6006"
+    exit 0
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Default: hardcoded full sweep (same four sections as sh/run.sh, no Slurm).
 # ─────────────────────────────────────────────────────────────────────────────
 declare -A PCT_BUDGETS=(
     [cora]="0.005,0.01,0.02,0.03,0.04"
