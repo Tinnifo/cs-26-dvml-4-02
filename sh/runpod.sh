@@ -20,6 +20,10 @@ cd "$(dirname "$0")/.."  # run from repo root regardless of cwd
 # Environment
 # ─────────────────────────────────────────────────────────────────────────────
 export CUDA_VISIBLE_DEVICES=0
+# torch>=2.6 flipped torch.load default to weights_only=True, which rejects
+# PyG's pickled Planetoid cache. Force the pre-2.6 behaviour so dataset loads
+# don't fail on the first run.
+export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 # 32 vCPU box. Hydra's joblib launcher runs n_jobs=8 training processes in
 # parallel (see conf/config.yaml), so per-process thread pools must stay small
 # enough that 8 * threads <= 32 vCPUs — otherwise OMP context switching eats

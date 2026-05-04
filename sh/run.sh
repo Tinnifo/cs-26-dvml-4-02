@@ -19,6 +19,11 @@
 set -e
 source .venv/bin/activate
 
+# torch>=2.6 flipped torch.load default to weights_only=True, which rejects
+# PyG's pickled Planetoid cache. Force the pre-2.6 behaviour so dataset loads
+# don't fail on the first run.
+export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
+
 # TensorBoard logging is on by default (conf/config.yaml). All runs write to
 # `runs/<dataset>/budget_<X>/<model>_<method>/`; view with `tensorboard --logdir runs`.
 

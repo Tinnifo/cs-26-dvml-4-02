@@ -21,6 +21,10 @@ cd "$(dirname "$0")/.."  # run from repo root regardless of cwd
 # Environment
 # ─────────────────────────────────────────────────────────────────────────────
 export CUDA_VISIBLE_DEVICES=0
+# torch>=2.6 flipped torch.load default to weights_only=True, which rejects
+# PyG's pickled Planetoid cache. Force the pre-2.6 behaviour so dataset loads
+# don't fail on the first run.
+export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 # Per-process thread pools sized for n_jobs=8 parallel Hydra processes on a
 # 32-vCPU box (8 * 4 = 32). See conf/config.yaml hydra.launcher.n_jobs.
 export OMP_NUM_THREADS=4
