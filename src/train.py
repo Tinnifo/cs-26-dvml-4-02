@@ -20,6 +20,7 @@ View with `tensorboard --logdir runs/`.
 from __future__ import annotations
 
 import copy
+import logging
 import os
 import sys
 
@@ -27,6 +28,8 @@ import hydra
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
+
+log = logging.getLogger(__name__)
 
 # Ensure project root is on the path so `src/` resolves.
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -87,7 +90,7 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
         try:
             model = torch.compile(model)
         except Exception as e:
-            print(f"  [warn] torch.compile failed ({e}); falling back to eager")
+            log.warning(f"torch.compile failed ({e}); falling back to eager")
     optimizer = method.build_optimizer(model)
 
     best_metric = -float("inf")
@@ -131,13 +134,13 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
 
 @hydra.main(config_path="../conf", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> float:
-    print(OmegaConf.to_yaml(cfg))
+    log.info("Resolved config:\n%s", OmegaConf.to_yaml(cfg))
 
     if cfg.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
         device = torch.device(cfg.device)
-    print(f"[train] device={device}")
+    log.info(f"device={device}")
 
     loaded = load_dataset(
         cfg.dataset.name,
@@ -157,7 +160,7 @@ def main(cfg: DictConfig) -> float:
 
     log_dir = run_log_dir(cfg)
     for seed in seeds:
-        print(f"  [seed={seed}] training...")
+        log.info(f"[seed={seed}] training...")
         ckpt_path = (
             os.path.join(log_dir, f"best_state_seed{seed}.pt")
             if cfg.save_checkpoints else None
@@ -167,8 +170,8 @@ def main(cfg: DictConfig) -> float:
                               checkpoint_path=ckpt_path)
         m = result["metrics"]
         all_metrics.append(m)
-        print(
-            f"  [seed={seed}] stopped@{result['stopped_at_epoch']} "
+        log.info(
+            f"[seed={seed}] stopped@{result['stopped_at_epoch']} "
             f"acc={m[0]:.4f} macroF1={m[3]:.4f}"
         )
 
@@ -197,7 +200,7 @@ def main(cfg: DictConfig) -> float:
     moe_acc = 1.96 * std[0] / np.sqrt(n)
     moe_f1 = 1.96 * std[3] / np.sqrt(n)
 
-    print(
+    log.info(
         f"[summary {cfg.model.name}/{cfg.method.name} {cfg.dataset.name} "
         f"b={format_budget(cfg.label_strategy.budget)}] "
         f"acc={mean[0]:.4f}+-{moe_acc:.4f}  macroF1={mean[3]:.4f}+-{moe_f1:.4f}"
