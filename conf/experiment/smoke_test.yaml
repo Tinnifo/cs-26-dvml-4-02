@@ -1,0 +1,38 @@
+# @package _global_
+#
+# Minimal smoke-test — exercises the same code path as full_grid but with a
+# single job so the pipeline can be verified quickly on a laptop (CPU-only).
+#
+# Usage:
+#   python src/train.py --multirun +experiment=smoke_test
+#
+# What runs: gcn + vanilla on Cora, per_class budget=20, 1 seed, 5 epochs.
+# Expected wall time: < 30 s on an M2 MacBook Pro (CPU).
+
+defaults:
+  - override /model: gcn
+  - override /method: vanilla
+  - override /dataset: cora
+  - override /label_strategy: per_class
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      model: gcn
+      method: vanilla
+      dataset: cora
+      label_strategy.budget: 20
+  launcher:
+    n_jobs: 1          # serial — no joblib parallelism overhead
+
+device: cpu            # MPS skipped; cpu is safest for a correctness check
+seeds: [0]             # single seed
+epochs: 5
+patience: 5
+epoch_log_every: 1
+save_checkpoints: false
+compile_model: false   # torch.compile adds startup cost; skip for smoke test
+
+tensorboard:
+  enable: false
