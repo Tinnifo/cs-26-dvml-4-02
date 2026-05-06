@@ -12,14 +12,30 @@
 # The optimizer's weight_decay is forced to 0 because the model adds the
 # L2 term to its own loss — `weight_decay` here only configures that term.
 name: cg3
-local_model: gcn
-global_model: hgcn
+
+# architecture
+local_model: gcn          # gcn | gat
+global_model: hgcn        # hgcn | hgat
+
+# optimization
 lr: 0.005
-weight_decay: 5e-4
+epochs: 1000
+weight_decay: 5e-4        # manual L2 term inside model loss
+optimizer_weight_decay: 0.0
+
+dropout: 0.6
+
+# hidden sizes
 hidden_local: 1024
 hidden_global: 32
-dropout: 0.6
+
+# hierarchical graph params
 coarsen_level: 4
 max_node_wgt: 50
 channel_num: 4
 node_wgt_embed_dim: 5
+
+# training
+use_early_stopping: false
+select_best_by: val_acc
+
