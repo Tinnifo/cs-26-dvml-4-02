@@ -29,4 +29,3 @@ hydra:
 
 tensorboard:
   enable: true
-

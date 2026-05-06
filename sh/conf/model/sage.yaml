@@ -1,5 +1,0 @@
-name: sage
-arch:
-  _target_: src.models.sage.SAGE
-  hidden_channels: 16
-  dropout: 0.5
