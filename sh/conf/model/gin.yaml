@@ -1,0 +1,5 @@
+name: gin
+arch:
+  _target_: src.models.gin.GIN
+  hidden_channels: 16
+  dropout: 0.5

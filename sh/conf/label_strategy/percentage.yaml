@@ -1,0 +1,4 @@
+# Global percentage budget: fraction of all nodes (capped at the original
+# Planetoid training pool size). Override budget on the CLI per dataset.
+name: percentage
+budget: 0.01

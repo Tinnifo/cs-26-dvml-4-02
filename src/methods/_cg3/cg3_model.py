@@ -1,225 +1,250 @@
+"""CG3 GNNModel — local-view GCN/GAT fused with a global HGCN/HGAT view.
+
+Faithful port of the snapshot/86b0818 `CG3Method/CG3Model.py`. Key
+differences vs. the original:
+- The optimizer is owned by Hydra's `BaseMethod.build_optimizer`, not by the
+  model.
+- `dp_fea0` (dropout-getter list) is replaced by an explicit `dropout: float`
+  ctor kwarg, with `self.training` toggling it on/off.
+- Numpy buffers from preprocessing (`edge_pos`, `train_idx`, `train_mat01`,
+  `mat01_intra/inter`) are converted to tensors and registered as buffers
+  here so `.to(device)` moves them.
+- `forward(features, support, labels, mask)` returns the same
+  `(outputs, loss, accuracy)` 3-tuple as the snapshot. Inference paths can
+  pass any labels/mask and ignore the loss/accuracy outputs.
+"""
+
+from __future__ import annotations
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv
-from .hgcn import HGCN_PyG as HGCN
+
+from .cg3_layers import MLP, GraphAttention, GraphConvolution
 
 
-class CG3Model(nn.Module):    
-    def __init__(self, in_dim, hidden_dim, num_classes):
-            super().__init__()
-
-            # ======================
-            # GCN (local view)
-            # ======================
-            self.gcn1 = GCNConv(in_dim, hidden_dim, normalize=False)
-            self.gcn2 = GCNConv(hidden_dim, hidden_dim, normalize=False)
-
-            # ======================
-            # HGCN (global view)
-            # ======================
-            self.hgcn = HGCN(in_dim, hidden_dim, hidden_dim)
-            
-            # ======================
-            # edge decoder (paper MLP)
-            # ======================
-            self.W_edge = nn.Linear(hidden_dim, hidden_dim, bias=False)
-
-            # FIXED paper fusion
-            self.alpha = 0.8
-
-            # classifier
-            self.classifier = nn.Linear(hidden_dim, num_classes)
-
-    # ---------------------
-    # GCN encoder
-    # ---------------------
-    def encode_gcn(self, x, edge_index, edge_weight):
-        x = F.relu(self.gcn1(x, edge_index, edge_weight))
-        x = F.dropout(x, p=0.5, training=self.training)  # <-- ADD THIS
-        x = self.gcn2(x, edge_index, edge_weight)
-        return x
-
-    # ---------------------
-    # forward
-    # ---------------------
-    def forward(self, x, edge_index, edge_weight):
-
-        z_gcn = self.encode_gcn(x, edge_index, edge_weight)
-        z_hgcn = self.hgcn(x, edge_index, edge_weight)
-
-        z_gcn = F.dropout(z_gcn, p=0.5, training=self.training)
-        z_hgcn = F.dropout(z_hgcn, p=0.5, training=self.training)
-
-        z_gcn = F.normalize(z_gcn, dim=1)
-        z_hgcn = F.normalize(z_hgcn, dim=1)
-
-        z = self.alpha * z_gcn + (1 - self.alpha) * z_hgcn
-        z = F.normalize(z, dim=1)
-
-        logits = self.classifier(z)
-
-        return z_gcn, z_hgcn, z, logits
-    
-    def contrastive_loss(self, z_gcn, z_hgcn, train_idx, pos_mask, neg_mask, tau=0.5, hp1=0.9):
-        """
-        z_gcn   : [N, C]
-        z_hgcn  : [N, C]
-        train_idx : indices of labeled nodes
-        pos_mask : [L, L] same-class mask
-        neg_mask : [L, L] different-class mask
-        """
-     
-    
-
-        # ======================
-        # UNSUPERVISED (paper exact)
-        # ======================
-
-        sim = torch.exp(torch.matmul(z_gcn, z_hgcn.t()) / tau)
-
-        pos = sim.diag()
-        denom = sim.sum(dim=1) - pos + 1e-8   # exclude self
-
-        unsup_1 = pos / denom
+def masked_softmax_cross_entropy(preds: torch.Tensor, labels: torch.Tensor,
+                                 mask: torch.Tensor) -> torch.Tensor:
+    """One-hot labels + int mask, matching the snapshot's TF formulation."""
+    log_probs = F.log_softmax(preds, dim=1)
+    loss = -(labels * log_probs).sum(dim=1)
+    mask = mask.float()
+    mean = mask.mean()
+    if mean.item() == 0:
+        return torch.zeros((), device=preds.device)
+    mask = mask / mean
+    loss = loss * mask
+    return loss.mean()
 
 
-        sim_rev = torch.exp(torch.matmul(z_hgcn, z_gcn.t()) / tau)
-
-        pos_rev = sim_rev.diag()
-        denom_rev = sim_rev.sum(dim=1) - pos_rev + 1e-8
-
-        unsup_2 = pos_rev / denom_rev
-
-        unsup_loss = -hp1 * (
-            torch.log(unsup_1 + 1e-8).mean() +
-            torch.log(unsup_2 + 1e-8).mean()
-        )
+def masked_accuracy(preds: torch.Tensor, labels: torch.Tensor,
+                    mask: torch.Tensor) -> torch.Tensor:
+    correct = torch.eq(torch.argmax(preds, 1), torch.argmax(labels, 1)).float()
+    mask = mask.float()
+    mean = mask.mean()
+    if mean.item() == 0:
+        return torch.zeros((), device=preds.device)
+    mask = mask / mean
+    return (correct * mask).mean()
 
 
-        # ======================
-        # SUPERVISED (paper version)
-        # ======================
+class GNNModel(nn.Module):
+    def __init__(self, *, num_classes: int, hidden: int, input_dim: int,
+                 global_model: nn.Module, train_idx, edge_pos,
+                 mat01_tr_te, weight_decay: float,
+                 local_model: str, dropout: float, num_features_nonzero: int):
+        super().__init__()
 
-        h1 = z_gcn[train_idx]
-        h2 = z_hgcn[train_idx]
-        h1 = F.normalize(h1, dim=1)
-        h2 = F.normalize(h2, dim=1)
-        
-        sim = torch.matmul(h1, h2.t()) / tau
+        self.weight_decay = float(weight_decay)
+        self.input_dim = input_dim
+        self.num_classes = num_classes
+        self.hidden1 = hidden
+        self.global_model = global_model
+        self.dropout = float(dropout)
 
-
-        # positive and negative separation
-        pos_sum = (sim * pos_mask).sum(dim=1)
-        neg_sum = (sim * neg_mask).sum(dim=1)
-
-        # IMPORTANT: match TF normalization
-        N = pos_mask.size(1)
-
-        pos_mean = pos_sum / (pos_mask.sum(dim=1) + 1e-8)
-        neg_mean = (neg_sum + pos_sum) / (N - 1 + 1e-8)
-
-        sup_1 = pos_mean / (neg_mean + 1e-8)
-
-
-        # reverse direction (HGCN → GCN)
-        sim_rev = torch.matmul(h2, h1.t()) / tau
-
-        pos_sum_rev = (sim_rev * pos_mask).sum(dim=1)
-        neg_sum_rev = (sim_rev * neg_mask).sum(dim=1)
-
-        pos_mean_rev = pos_sum_rev / (pos_mask.sum(dim=1) + 1e-8)
-        neg_mean_rev = (neg_sum_rev + pos_sum_rev) / (N - 1 + 1e-8)
-
-        sup_2 = pos_mean_rev / (neg_mean_rev + 1e-8)
-
-        sup_loss = -hp1 * (
-            torch.log(sup_1 + 1e-8).mean() +
-            torch.log(sup_2 + 1e-8).mean()
-        )
-        
-        return unsup_loss + sup_loss
-    
-    # ======================
-    # EDGE GENERATIVE LOSS (PAPER MATCHED)
-    # ======================
-    def edge_loss(self, z_gcn, z_hgcn, edge_index):
-
-        i, j = edge_index
-        num_nodes = z_gcn.size(0)
-
-        # -----------------------
-        # POSITIVE
-        # -----------------------
-        pos_score_1 = (z_gcn[i] * self.W_edge(z_hgcn[j])).sum(dim=1)
-        pos_score_2 = (z_hgcn[i] * self.W_edge(z_gcn[j])).sum(dim=1)
-
-        pos_loss = (
-            -torch.log(torch.sigmoid(pos_score_1) + 1e-8).mean()
-            -torch.log(torch.sigmoid(pos_score_2) + 1e-8).mean()
-        )
-
-        # -----------------------
-        # NEGATIVE SAMPLING
-        # -----------------------
-        neg_j = torch.randint(0, num_nodes, j.size(), device=j.device)
-
-        # avoid sampling true edges
-        mask = (neg_j == j)
-        while mask.any():
-            neg_j[mask] = torch.randint(0, num_nodes, (mask.sum(),), device=j.device)
-            mask = (neg_j == j)
-
-        neg_score_1 = (z_gcn[i] * self.W_edge(z_hgcn[neg_j])).sum(dim=1)
-        neg_score_2 = (z_hgcn[i] * self.W_edge(z_gcn[neg_j])).sum(dim=1)
-
-        neg_loss = (
-            -torch.log(1 - torch.sigmoid(neg_score_1) + 1e-8).mean()
-            -torch.log(1 - torch.sigmoid(neg_score_2) + 1e-8).mean()
-        )
-
-        return pos_loss + neg_loss
-        
-    def compute_loss(self, z_gcn, z_hgcn, z, logits, data,
-                    train_idx, pos_mask, neg_mask,
-                    mode="full"):
-
-        loss_cls = F.cross_entropy(
-            logits[data.train_mask],
-            data.y[data.train_mask]
-        )
-
-        loss_cl = self.contrastive_loss(
-            z_gcn, z_hgcn,
-            train_idx, pos_mask, neg_mask
-        )
-
-        loss_edge = self.edge_loss(
-            z_gcn, z_hgcn,
-            data.edge_index
-        )
-
-        i, j = data.edge_index
-        hgcn_smooth = ((z_hgcn[i] - z_hgcn[j])**2).sum(dim=1).mean()
-
-        # ======================
-        # CONTROL MODES
-        # ======================
-        if mode == "cls":
-            return loss_cls
-
-        elif mode == "cls+cl":
-            return loss_cls + 0.05 * loss_cl
-
-        elif mode == "cls+cl+edge":
-            return loss_cls + 0.05 * loss_cl + 0.05 * loss_edge
-
-        elif mode == "full":
-            return (
-                loss_cls
-                + 0.15 * loss_cl
-                + 0.05 * loss_edge
-            )
-
+        if local_model == "gat":
+            LocalLayer = GraphAttention
+            hidden_act = F.elu
+            hidden_dropout = self.dropout
+            output_dropout = self.dropout
+        elif local_model == "gcn":
+            LocalLayer = GraphConvolution
+            hidden_act = F.relu
+            hidden_dropout = self.dropout
+            output_dropout = 0.0
         else:
-            raise ValueError("Unknown loss mode")
+            raise ValueError(f"Unknown local_model: {local_model}")
+
+        # Numpy preprocessing buffers — converted to tensors, registered so
+        # `.to(device)` moves them with the model.
+        self.register_buffer(
+            "edge_pos_i", torch.from_numpy(np.asarray(edge_pos[:, 0]).astype("int64")),
+        )
+        self.register_buffer(
+            "edge_pos_j", torch.from_numpy(np.asarray(edge_pos[:, 1]).astype("int64")),
+        )
+        self.register_buffer(
+            "train_idx_buf", torch.from_numpy(np.asarray(train_idx).astype("int64")),
+        )
+        # train_mat01 (N×N) is registered as a buffer in the snapshot but
+        # never read in forward — skipped here to avoid OOM on PubMed (~19K
+        # nodes → ~1.5 GB float32). Drop without behavioral change.
+        self.register_buffer(
+            "mat01_intra", torch.from_numpy(mat01_tr_te[0].astype("float32")),
+        )
+        self.register_buffer(
+            "mat01_inter", torch.from_numpy(mat01_tr_te[1].astype("float32")),
+        )
+        self.register_buffer(
+            "mat01_intra_rowsum",
+            torch.from_numpy(np.sum(mat01_tr_te[0], axis=1).astype("float32")),
+        )
+        self.train_idx_size = int(np.shape(train_idx)[0])
+
+        # Two GNN class layers — the snapshot's classifier head.
+        self.classlayers = nn.ModuleList()
+        self.classlayers.append(LocalLayer(
+            act=hidden_act,
+            input_dim=self.input_dim,
+            output_dim=self.hidden1,
+            support=None,                       # set per forward
+            sparse_inputs=True,
+            isSparse=True,
+            dropout=hidden_dropout,
+            num_features_nonzero=num_features_nonzero,
+            bias=True,
+        ))
+        self.classlayers.append(LocalLayer(
+            act=(lambda x: x),
+            input_dim=self.hidden1,
+            output_dim=self.num_classes,
+            support=None,
+            sparse_inputs=False,
+            isSparse=True,
+            dropout=output_dropout,
+            num_features_nonzero=num_features_nonzero,
+            bias=True,
+        ))
+
+        # Edge generative MLP (p_e_xy decoder).
+        self.p_e_yy_w_contra = MLP(
+            act=(lambda x: x),
+            input_dim=2 * self.num_classes,
+            output_dim=1,
+            sparse_inputs=False,
+            isSparse=True,
+            bias=True,
+        )
+
+        self.outputs: torch.Tensor | None = None
+        self.concat_vec_local: torch.Tensor | None = None
+        self.concat_vec_global: torch.Tensor | None = None
+        self.loss = torch.tensor(0.0)
+        self.accuracy = torch.tensor(0.0)
+        self.p_e_xy = torch.tensor(0.0)
+
+    @property
+    def train_idx(self) -> torch.Tensor:
+        return self.train_idx_buf
+
+    def forward(self, features: torch.Tensor, support: torch.Tensor,
+                labels: torch.Tensor, mask: torch.Tensor):
+        # Class layer 1 → hidden
+        self.classlayers[0].support = support
+        self.classlayers[0].sparse_inputs = True
+        h0 = self.classlayers[0](features)
+
+        # Class layer 2 → num_classes
+        self.classlayers[1].support = support
+        self.classlayers[1].sparse_inputs = False
+        h1 = self.classlayers[1](h0)
+
+        self.concat_vec_local = F.normalize(h1, p=2, dim=1)
+
+        # HGCN/HGAT global view — note: features must be the same sparse
+        # input the local view consumes.
+        global_out = self.global_model(features)
+        self.concat_vec_global = F.normalize(global_out, p=2, dim=1)
+
+        self.outputs = F.normalize(
+            0.6 * self.concat_vec_local + 0.4 * self.concat_vec_global, p=2, dim=1,
+        )
+
+        loss_q_yobs_x_g = masked_softmax_cross_entropy(self.outputs, labels, mask)
+
+        y_ei_local = self.concat_vec_local.index_select(0, self.edge_pos_i)
+        y_ej_global = self.concat_vec_global.index_select(0, self.edge_pos_j)
+        y_ei_global = self.concat_vec_global.index_select(0, self.edge_pos_i)
+        y_ej_local = self.concat_vec_local.index_select(0, self.edge_pos_j)
+
+        p_e_xy_1 = -torch.mean(torch.log(torch.sigmoid(
+            self.p_e_yy_w_contra(torch.cat([y_ei_local, y_ej_global], dim=1))
+        ).clamp(min=1e-8)))
+        p_e_xy_2 = -torch.mean(torch.log(torch.sigmoid(
+            self.p_e_yy_w_contra(torch.cat([y_ei_global, y_ej_local], dim=1))
+        ).clamp(min=1e-8)))
+        self.p_e_xy = p_e_xy_1 + p_e_xy_2
+
+        total = loss_q_yobs_x_g + 0.4 * self.p_e_xy
+        total = total + self._contrastive_loss()
+
+        # Manual L2 on classlayer + p_e_yy_w_contra weights — matches snapshot.
+        for i in range(2):
+            for var in self.classlayers[i].vars.values():
+                total = total + self.weight_decay * 0.5 * torch.sum(var ** 2)
+        for var in self.p_e_yy_w_contra.vars.values():
+            total = total + self.weight_decay * 0.5 * torch.sum(var ** 2)
+
+        # Add the global model's own weight-decay term.
+        total = total + self.global_model.loss
+
+        self.loss = total
+        self.accuracy = masked_accuracy(self.outputs, labels, mask)
+        return self.outputs, self.loss, self.accuracy
+
+    def _contrastive_loss(self) -> torch.Tensor:
+        device = self.concat_vec_local.device
+        loss = torch.zeros((), device=device)
+
+        # Eq. 4 — pairwise unsupervised between local & global (and reverse).
+        cos_dist = torch.exp(torch.matmul(
+            self.concat_vec_local, self.concat_vec_global.t(),
+        ) / 0.5)
+        neg = torch.mean(cos_dist, dim=1)
+        diag_cos = torch.diagonal(cos_dist, 0)
+        pos_neg1 = diag_cos / (neg + 1e-8)
+
+        hp1 = 0.9
+
+        cos_dist = torch.exp(torch.matmul(
+            self.concat_vec_global, self.concat_vec_local.t(),
+        ) / 0.5)
+        neg = torch.mean(cos_dist, dim=1)
+        diag_cos = torch.diagonal(cos_dist, 0)
+        pos_neg2 = diag_cos / (neg + 1e-8)
+
+        pos_neg3 = torch.cat([pos_neg1, pos_neg2], dim=0)
+        loss = loss + (-hp1 * torch.mean(torch.log(pos_neg3.clamp(min=1e-8))))
+
+        # Supervised contrastive (round 1).
+        h1 = self.concat_vec_local.index_select(0, self.train_idx_buf)
+        h2 = self.concat_vec_global.index_select(0, self.train_idx_buf)
+        h_cos = torch.exp(torch.matmul(h1, h2.t()) / 0.5)
+        sup_pos = torch.sum(h_cos * self.mat01_intra, dim=1)
+        sup_neg = (torch.sum(h_cos * self.mat01_inter, dim=1) + sup_pos) / max(self.train_idx_size - 1, 1)
+        sup_pos = sup_pos / (self.mat01_intra_rowsum + 1e-8)
+        pos_neg_sup_1 = sup_pos / (sup_neg + 1e-8)
+
+        # Supervised contrastive (round 2, swapped).
+        h2_b = self.concat_vec_local.index_select(0, self.train_idx_buf)
+        h1_b = self.concat_vec_global.index_select(0, self.train_idx_buf)
+        h_cos = torch.exp(torch.matmul(h1_b, h2_b.t()) / 0.5)
+        sup_pos = torch.sum(h_cos * self.mat01_intra, dim=1)
+        sup_neg = (torch.sum(h_cos * self.mat01_inter, dim=1) + sup_pos) / max(self.train_idx_size - 1, 1)
+        sup_pos = sup_pos / (self.mat01_intra_rowsum + 1e-8)
+        pos_neg_sup_2 = sup_pos / (sup_neg + 1e-8)
+
+        pos_neg_sup_3 = torch.cat([pos_neg_sup_1, pos_neg_sup_2], dim=0)
+        loss = loss + (-hp1 * torch.mean(torch.log(pos_neg_sup_3.clamp(min=1e-8))))
+        return loss

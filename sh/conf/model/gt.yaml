@@ -1,0 +1,6 @@
+name: gt
+arch:
+  _target_: src.models.gt.GT
+  hidden_channels: 16
+  heads: 4
+  dropout: 0.5

@@ -1,0 +1,11 @@
+# Diff = MLP on propagated features (D2PT / IceBerg's headline backbone).
+# hidden_channels intentionally larger than the 16-dim used by the other
+# backbones — Diff is an MLP and underfits at hidden=16. T/alpha are the
+# Cora/CiteSeer recommendations; for PubMed pass `model.arch.alpha=0.05`.
+name: diff
+arch:
+  _target_: src.models.diff.Diff
+  hidden_channels: 128
+  dropout: 0.5
+  T: 20
+  alpha: 0.1

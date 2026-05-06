@@ -1,13 +1,25 @@
 # CG3 owns its model + multi-task loss. `cfg.model` is ignored — pair this
 # method with `model=cg3` for clarity.
 #
-# Staging matches CG3Method/train.py upstream:
-#   epoch <= warmup       -> mode="cls"      (classification only)
-#   epoch <= full_start   -> mode="cls+cl"   (cls + 0.05 * contrastive)
-#   epoch >  full_start   -> mode="full"     (cls + 0.15 * contrastive + 0.05 * edge)
+# Two architecture knobs select one of the four combinations from the
+# snapshot/86b0818 reference (CG3Method/main.py):
+#   local_model:  gcn | gat   (the local two-layer classifier)
+#   global_model: hgcn | hgat (the hierarchical global view)
+#
+# Defaults match snapshot's hyperparameters exactly:
+#   hidden_local=1024, hidden_global=32, dropout=0.6, lr=0.005, wd=5e-4,
+#   coarsen_level=4, channel_num=4, max_node_wgt=50, node_wgt_embed_dim=5.
+# The optimizer's weight_decay is forced to 0 because the model adds the
+# L2 term to its own loss — `weight_decay` here only configures that term.
 name: cg3
+local_model: gcn
+global_model: hgcn
 lr: 0.005
 weight_decay: 5e-4
-hidden_dim: 64
-warmup: 30
-full_start: 80
+hidden_local: 1024
+hidden_global: 32
+dropout: 0.6
+coarsen_level: 4
+max_node_wgt: 50
+channel_num: 4
+node_wgt_embed_dim: 5

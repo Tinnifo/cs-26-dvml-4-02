@@ -1,23 +1,30 @@
-"""CG3 method (contrastive graph-to-graph learning).
+"""CG3 method — faithful port of the snapshot/86b0818 CG3 pipeline.
 
 Architecture and loss are coupled, so this method ignores `cfg.model` and
-builds its own model (`CG3Model`). Preprocessing builds the multi-level
-hierarchy (`build_hierarchy_from_coarsen.build_hierarchy`) and pre-normalizes
-the level-0 edge_index/edge_weight (since CG3's GCN convs use
-`normalize=False` and rely on weights coming from `normalize_edge_index`).
-Training step computes the multi-task loss inside `CG3Model.compute_loss`
-with a staged mode schedule (`cls` -> `cls+cl` -> `full`).
+builds its own composite model:
+  * a local-view `GraphConvolution` / `GraphAttention` two-layer classifier
+    (selectable via `cfg.method.local_model = "gcn" | "gat"`).
+  * a global-view hierarchical `HGCN` / `HGAT` (selectable via
+    `cfg.method.global_model = "hgcn" | "hgat"`).
+The four (local × global) combinations are the four experiments shown in
+the snapshot's `CG3Method/main.py`.
 
-The model's forward returns a 4-tuple `(z_gcn, z_hgcn, z, logits)`; we
-override `predict_logits` to extract just `logits` so the shared eval path
-in `BaseMethod` produces the same 5-tuple as for vanilla / iceberg.
+`prepare` runs the graph-coarsening and supervised-contrastive bookkeeping
+once at the start of training and stashes the per-data tensors on `data`
+under `_cg3_*` attributes. Each forward call passes `(features, support,
+labels, mask)` to the model, which returns `(outputs, loss, accuracy)` —
+matching the snapshot's `forward` contract exactly.
+
+The model adds an L2 weight-decay term inside its own loss, so the
+optimizer is constructed with `weight_decay=0` to avoid double-counting.
 """
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Any, Dict
 
 import torch
+import torch.nn.functional as F
 
 from src.methods.base import BaseMethod
 
@@ -25,98 +32,142 @@ from src.methods.base import BaseMethod
 class CG3Method(BaseMethod):
     def __init__(self, cfg):
         super().__init__(cfg)
-        self.hidden_dim = int(cfg.method.hidden_dim)
-        self.warmup = int(cfg.method.warmup)
-        self.full_start = int(cfg.method.full_start)
-        self._train_idx = None
-        self._pos_mask = None
-        self._neg_mask = None
+        self.local_model = str(cfg.method.local_model)
+        self.global_model_name = str(cfg.method.global_model)
+        self.lr = float(cfg.method.lr)
+        self.weight_decay = float(cfg.method.weight_decay)
+        self.hidden_local = int(cfg.method.hidden_local)
+        self.hidden_global = int(cfg.method.hidden_global)
+        self.dropout = float(cfg.method.dropout)
+        self.coarsen_level = int(cfg.method.coarsen_level)
+        self.max_node_wgt = int(cfg.method.max_node_wgt)
+        self.channel_num = int(cfg.method.channel_num)
+        self.node_wgt_embed_dim = int(cfg.method.node_wgt_embed_dim)
+        self._artifacts = None  # populated in build_model
 
     def build_model(self, in_channels: int, num_classes: int, *, data=None) -> torch.nn.Module:
-        from src.methods._cg3.cg3_model import CG3Model
-        return CG3Model(
-            in_dim=in_channels,
-            hidden_dim=self.hidden_dim,
-            num_classes=num_classes,
+        if data is None:
+            raise RuntimeError(
+                "CG3Method.build_model requires `data=` (it preprocesses the "
+                "graph hierarchy before constructing the model)."
+            )
+
+        from src.methods._cg3.build_hierarchy import build_cg3_artifacts
+        from src.methods._cg3.cg3_model import GNNModel
+        from src.methods._cg3.hgcn import HGAT, HGCN
+
+        artifacts = build_cg3_artifacts(
+            data,
+            coarsen_level=self.coarsen_level,
+            max_node_wgt=self.max_node_wgt,
+            channel_num=self.channel_num,
         )
+        self._artifacts = artifacts
+
+        if self.global_model_name == "hgcn":
+            GlobalCls = HGCN
+        elif self.global_model_name == "hgat":
+            GlobalCls = HGAT
+        else:
+            raise ValueError(f"Unknown global_model: {self.global_model_name}")
+
+        global_model = GlobalCls(
+            input_dim=artifacts.input_dim,
+            output_dim=artifacts.num_classes,
+            hidden=self.hidden_global,
+            transfer_list=artifacts.transfer_list,
+            adj_list=artifacts.adj_list,
+            node_wgt_list=artifacts.node_wgt_list,
+            coarsen_level=self.coarsen_level,
+            max_node_wgt=self.max_node_wgt,
+            node_wgt_embed_dim=self.node_wgt_embed_dim,
+            weight_decay=self.weight_decay,
+            channel_num=self.channel_num,
+            dropout=self.dropout,
+        )
+
+        model = GNNModel(
+            num_classes=artifacts.num_classes,
+            hidden=self.hidden_local,
+            input_dim=artifacts.input_dim,
+            global_model=global_model,
+            train_idx=artifacts.train_idx_np,
+            edge_pos=artifacts.edge_pos,
+            mat01_tr_te=artifacts.mats_intra_inter,
+            weight_decay=self.weight_decay,
+            local_model=self.local_model,
+            dropout=self.dropout,
+            num_features_nonzero=artifacts.num_features_nonzero,
+        )
+        return model
 
     def prepare(self, model: torch.nn.Module, data):
-        from torch_geometric.utils import to_scipy_sparse_matrix
-
-        from src.methods._cg3.build_hierarchy import build_hierarchy, normalize_edge_index
-
+        """Move CPU artifacts onto the data's device and stash them on
+        `data._cg3_*`. Called once after `build_model().to(device)`."""
         device = data.x.device
-        adj = to_scipy_sparse_matrix(data.edge_index.cpu()).tocsr()
-        edge_levels, c_matrices, _graphs = build_hierarchy(adj)
+        a = self._artifacts
+        if a is None:
+            raise RuntimeError("CG3Method.prepare called before build_model")
 
-        # Move each `(ei, ew)` tuple to device. HGCN.forward unpacks both per
-        # level — pass tuples through unchanged.
-        edge_levels = [(ei.to(device), ew.to(device)) for ei, ew in edge_levels]
-        model.hgcn.set_hierarchy(edge_levels, c_matrices)
-
-        # Pre-normalize the level-0 edge_index for the local-view GCN convs
-        # (CG3Model's gcn1/gcn2 use `normalize=False`). HGCN ignores the
-        # function-arg edge_weight and uses its per-level weights from
-        # `edge_levels`, so we only need to get the level-0 normalization
-        # right here.
-        ei0, ew0 = normalize_edge_index(
-            data.edge_index, int(data.num_nodes), getattr(data, "edge_weight", None),
-        )
-        data.edge_index = ei0.to(device)
-        data.edge_weight = ew0.to(device)
-
-        self._refresh_supervised_masks(data)
+        data._cg3_feature_sp = a.feature_sp.to(device)
+        data._cg3_support_sp = a.support_sp.to(device)
+        data._cg3_y_train_oh = a.y_train_oh.to(device)
+        data._cg3_train_mask_int = a.train_mask_int.to(device)
+        data._cg3_y_val_oh = a.y_val_oh.to(device)
+        data._cg3_val_mask_int = a.val_mask_int.to(device)
+        data._cg3_y_test_oh = a.y_test_oh.to(device)
+        data._cg3_test_mask_int = a.test_mask_int.to(device)
         return data
 
-    def _refresh_supervised_masks(self, data):
-        self._train_idx = data.train_mask.nonzero(as_tuple=True)[0]
-        labels = data.y[self._train_idx]
-        pos = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
-        pos.fill_diagonal_(0)
-        neg = 1 - pos
-        neg.fill_diagonal_(0)
-        self._pos_mask = pos
-        self._neg_mask = neg
+    def build_optimizer(self, model: torch.nn.Module) -> torch.optim.Optimizer:
+        # Snapshot adds the L2 term inside its own loss — avoid double-counting.
+        return torch.optim.Adam(model.parameters(), lr=self.lr, weight_decay=0.0)
 
-    def _stage_for(self, epoch: int) -> str:
-        if epoch <= self.warmup:
-            return "cls"
-        if epoch <= self.full_start:
-            return "cls+cl"
-        return "full"
-
-    def train_step(self, model: torch.nn.Module, data, optimizer: torch.optim.Optimizer,
-                   epoch: int) -> Dict[str, float]:
+    def train_step(self, model: torch.nn.Module, data,
+                   optimizer: torch.optim.Optimizer, epoch: int) -> Dict[str, float]:
         model.train()
         optimizer.zero_grad()
-        z_gcn, z_hgcn, z, logits = model(data.x, data.edge_index, data.edge_weight)
-        mode = self._stage_for(epoch)
-        loss = model.compute_loss(
-            z_gcn, z_hgcn, z, logits,
-            data, self._train_idx, self._pos_mask, self._neg_mask,
-            mode=mode,
+        outputs, loss, accuracy = model(
+            data._cg3_feature_sp,
+            data._cg3_support_sp,
+            data._cg3_y_train_oh,
+            data._cg3_train_mask_int,
         )
         loss.backward()
         optimizer.step()
-        return {"train_loss": float(loss.item()), "stage": mode}
+        return {
+            "train_loss": float(loss.detach().item()),
+            "train_acc": float(accuracy.detach().item()),
+        }
 
     def predict_logits(self, model: torch.nn.Module, data) -> torch.Tensor:
         model.eval()
         with torch.no_grad():
-            _, _, _, logits = model(data.x, data.edge_index, data.edge_weight)
-        return logits
+            outputs, _, _ = model(
+                data._cg3_feature_sp,
+                data._cg3_support_sp,
+                data._cg3_y_train_oh,
+                data._cg3_train_mask_int,
+            )
+        return outputs
 
     def validate(self, model: torch.nn.Module, data) -> Dict[str, float]:
-        import torch.nn.functional as F
         model.eval()
         with torch.no_grad():
-            _, _, _, logits = model(data.x, data.edge_index, data.edge_weight)
-            pred = logits.argmax(dim=1)
-        out = {
-            "train_acc": float((pred[data.train_mask] == data.y[data.train_mask]).float().mean().item()),
+            outputs, _, _ = model(
+                data._cg3_feature_sp,
+                data._cg3_support_sp,
+                data._cg3_y_val_oh,
+                data._cg3_val_mask_int,
+            )
+            pred = outputs.argmax(dim=1)
+        out: Dict[str, float] = {
+            "train_acc": float(
+                (pred[data.train_mask] == data.y[data.train_mask]).float().mean().item()
+            ),
         }
         if hasattr(data, "val_mask") and data.val_mask.sum() > 0:
-            val_loss = F.cross_entropy(logits[data.val_mask], data.y[data.val_mask]).item()
+            val_loss = F.cross_entropy(outputs[data.val_mask], data.y[data.val_mask]).item()
             val_acc = float((pred[data.val_mask] == data.y[data.val_mask]).float().mean().item())
             out["val_loss"] = val_loss
             out["val_acc"] = val_acc
