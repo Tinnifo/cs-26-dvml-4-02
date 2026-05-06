@@ -201,6 +201,97 @@ class GraphConvolution(Layer):
             output = F.normalize(output, p=2, dim=0)
         return self.act(output)
 
+class GraphAttention(Layer):
+    """Attention-based graph layer for local CG3 graph."""
+
+    def __init__(self, input_dim, output_dim, support, num_features_nonzero,
+                 act=F.softplus, bias=False, sparse_inputs=False,
+                 isnorm=False, isSparse=True, dropout=0, alpha=0.2, **kwargs):
+        super(GraphAttention, self).__init__(**kwargs)
+
+        self.act = act
+        self.support = support.coalesce()
+        self.use_bias = bias
+        self.isnorm = isnorm
+        self.isSparse = isSparse
+        self.sparse_inputs = sparse_inputs
+        self.dropout = dropout
+        self.num_features_nonzero = num_features_nonzero
+        self.alpha = alpha
+
+        # linear transform
+        self.vars['weights'] = glorot([input_dim, output_dim], name='weights')
+        self.register_parameter('weights', self.vars['weights'])
+
+        # attention parameters
+        self.vars['attn_l'] = glorot([output_dim, 1], name='attn_l')
+        self.vars['attn_r'] = glorot([output_dim, 1], name='attn_r')
+        self.register_parameter('attn_l', self.vars['attn_l'])
+        self.register_parameter('attn_r', self.vars['attn_r'])
+
+        if self.use_bias:
+            self.vars['bias'] = zeros([output_dim], name='bias')
+            self.register_parameter('bias', self.vars['bias'])
+
+        self.leakyrelu = nn.LeakyReLU(alpha)
+
+    def _get_dropout_rate(self):
+        if callable(self.dropout):
+            return float(self.dropout())
+        return float(self.dropout)
+
+    def forward(self, inputs):
+        x = inputs
+        dropout_rate = self._get_dropout_rate()
+
+        # feature dropout
+        if self.sparse_inputs:
+            x = sparse_dropout(x, 1 - dropout_rate, self.num_features_nonzero)
+        else:
+            x = F.dropout(x, p=dropout_rate, training=self.training)
+
+        # linear projection
+        Wh = dot(x, self.vars['weights'], sparse=self.sparse_inputs)
+
+        adj = self.support.coalesce()
+        indices = adj.indices()
+        row, col = indices[0], indices[1]
+
+        # attention logits
+        Wh_i = Wh[row]
+        Wh_j = Wh[col]
+
+        e = (
+            torch.matmul(Wh_i, self.vars['attn_l']).squeeze(-1) +
+            torch.matmul(Wh_j, self.vars['attn_r']).squeeze(-1)
+        )
+        e = self.leakyrelu(e)
+
+        # stable softmax
+        e = e - e.max()
+        exp_e = torch.exp(e)
+
+        denom = torch.zeros(
+            Wh.size(0),
+            device=Wh.device
+        ).scatter_add_(0, row, exp_e)
+
+        alpha = exp_e / (denom[row] + 1e-9)
+
+        # attention dropout
+        alpha = F.dropout(alpha, p=dropout_rate, training=self.training)
+
+        # aggregate
+        output = torch.zeros_like(Wh)
+        output.index_add_(0, row, alpha.unsqueeze(1) * Wh_j)
+
+        if self.use_bias:
+            output = output + self.vars['bias']
+
+        if self.isnorm:
+            output = F.normalize(output, p=2, dim=0)
+
+        return self.act(output)
 
 class MLP(Layer):
     """Dense MLP layer (single matmul + bias)."""

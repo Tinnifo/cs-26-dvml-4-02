@@ -231,3 +231,179 @@ class GraphConvolution(Layer):
 
         print('output shape:    ', list(output.shape))
         return output, gcn_output
+    
+    
+class GraphAttention(Layer):
+    """
+    Hierarchical Graph Attention layer (GAT-style)
+    compatible with HGCN transfer/coarsening framework.
+    """
+
+    def __init__(self, input_dim, output_dim, placeholders, support, transfer,
+                 mod, layer_index, dropout=0., sparse_inputs=False,
+                 act=F.elu, bias=False, featureless=False, alpha=0.2, **kwargs):
+        super(GraphAttention, self).__init__(**kwargs)
+
+        self.dropout_flag = bool(dropout)
+        self.placeholders = placeholders
+
+        self.act = act
+        self.support = support
+        self.transfer = transfer
+        self.sparse_inputs = sparse_inputs
+        self.featureless = featureless
+        self.use_bias = bias
+        self.mod = mod
+        self.layer_index = layer_index
+        self.output_dim = output_dim
+        self.alpha = alpha
+
+        self.num_features_nonzero = placeholders['num_features_nonzero']
+
+        # -------------------------
+        # Weight matrix (W)
+        # -------------------------
+        if self.mod in ['coarsen', 'refine']:
+            in_dim = input_dim + FLAGS.node_wgt_embed_dim
+        else:
+            in_dim = input_dim
+
+        self.W = glorot([in_dim, output_dim], name='att_weight')
+        self.register_parameter('W', self.W)
+
+        # -------------------------
+        # Attention parameters (a^T [Wh_i || Wh_j])
+        # -------------------------
+        self.a = glorot([2 * output_dim, 1], name='att_vector')
+        self.register_parameter('a', self.a)
+
+        if self.use_bias:
+            self.bias = zeros([output_dim], name='bias')
+            self.register_parameter('bias', self.bias)
+
+        # -------------------------
+        # Precompute sparse adjacency
+        # -------------------------
+        self.adj_tensor = []
+        for i in range(len(self.support)):
+            row = self.support[i][0][:, 0]
+            col = self.support[i][0][:, 1]
+            data = self.support[i][1]
+
+            sp_support = sp.csr_matrix(
+                (data, (row, col)),
+                shape=self.support[i][2],
+                dtype=np.float32
+            )
+
+            self.adj_tensor.append(
+                convert_sparse_matrix_to_sparse_tensor(sp_support)
+            )
+
+        # -------------------------
+        # Transfer matrix (same as GCN)
+        # -------------------------
+        if self.mod in ['coarsen', 'input']:
+            transfer_opo = normalize(self.transfer.T, norm='l2', axis=1).astype(np.float32)
+            self.register_buffer(
+                'transfer_tensor',
+                convert_sparse_matrix_to_sparse_tensor(transfer_opo)
+            )
+        elif self.mod == 'refine':
+            self.register_buffer(
+                'transfer_tensor',
+                convert_sparse_matrix_to_sparse_tensor(self.transfer.astype(np.float32))
+            )
+        else:
+            self.transfer_tensor = None
+
+    # -------------------------------------------------
+    # Attention mechanism (single-channel version)
+    # -------------------------------------------------
+    def _attention(self, Wh, adj):
+        """
+        Wh: (N, F)
+        adj: sparse adjacency
+        """
+
+        # pairwise attention: a^T [Wh_i || Wh_j]
+        N = Wh.shape[0]
+
+        # linear projections for edges
+        indices = adj._indices()
+        row, col = indices[0], indices[1]
+
+        Wh_i = Wh[row]
+        Wh_j = Wh[col]
+
+        edge_features = torch.cat([Wh_i, Wh_j], dim=1)
+
+        e = F.leaky_relu(torch.matmul(edge_features, self.a).squeeze(1), self.alpha)
+
+        # softmax normalization per node
+        e_exp = torch.exp(e)
+        zero_vec = torch.zeros(N, device=Wh.device)
+
+        denom = zero_vec.scatter_add(0, row, e_exp)
+        denom = denom[row] + 1e-16
+
+        alpha = e_exp / denom
+
+        # message passing
+        out = torch.zeros_like(Wh)
+        out = out.index_add(0, row, Wh_j * alpha.unsqueeze(1))
+
+        return out
+
+    # -------------------------------------------------
+    def forward(self, inputs, node_emb=None):
+
+        # -------------------------
+        # input handling
+        # -------------------------
+        if self.mod in ['coarsen', 'refine']:
+            x = torch.cat([inputs, node_emb], dim=1)
+        else:
+            x = inputs
+
+        # dropout
+        if self.sparse_inputs:
+            raise NotImplementedError("Sparse input not implemented for GAT layer")
+        else:
+            x = F.dropout(
+                x,
+                p=self.placeholders['dropout'] if self.dropout_flag else 0.0,
+                training=self.training
+            )
+
+        # linear transform
+        Wh = torch.matmul(x, self.W)
+
+        # multi-channel attention aggregation
+        outs = []
+        for adj in self.adj_tensor:
+            outs.append(self._attention(Wh, adj))
+
+        # stack channels (same style as GCN)
+        out = torch.stack(outs, dim=2)
+        out = out.mean(dim=2)  # aggregate channels
+
+        if self.use_bias:
+            out = out + self.bias
+
+        out = self.act(out)
+
+        gat_output = out
+
+        # -------------------------
+        # hierarchy transfer
+        # -------------------------
+        if self.mod == 'output':
+            return out, gat_output
+
+        if self.mod in ['coarsen', 'input']:
+            out = torch.sparse.mm(self.transfer_tensor, gat_output)
+        elif self.mod == 'refine':
+            out = torch.sparse.mm(self.transfer_tensor, gat_output)
+
+        return out, gat_output

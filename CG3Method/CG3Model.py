@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from CG3Layer import GraphConvolution, MLP
+from CG3Layer import GraphConvolution, GraphAttention, MLP
 
 
 def masked_softmax_cross_entropy(preds, labels, mask):
@@ -26,12 +26,15 @@ def masked_accuracy(preds, labels, mask):
     return accuracy_all.mean()
 
 
-class GCNModel(nn.Module):
+class GNNModel(nn.Module):
     def __init__(self, learning_rate, num_classes,
-                 h, input_dim, HGCN,
+                 h, input_dim, global_model,
                  train_idx, trtemask,
-                 dp_fea0, edge_pos, train_mat01, mat01_tr_te, weight_decay):
-        super(GCNModel, self).__init__()
+                 dp_fea0, edge_pos, train_mat01,
+                 mat01_tr_te, weight_decay,
+                 local_model):
+        super(GNNModel, self).__init__()
+        
 
         self.dp_fea0 = dp_fea0  # [dropout_getter_fn, num_features_nonzero_getter_fn]
         self.trtemask = trtemask
@@ -39,7 +42,20 @@ class GCNModel(nn.Module):
         self.input_dim = input_dim
         self.num_classes = num_classes
         self.hidden1 = h
-        self.HGCN = HGCN
+        self.global_model = global_model
+        
+        if local_model == "gat":
+            LocalLayer = GraphAttention
+            hidden_act = F.elu
+            hidden_dropout = self.dp_fea0[0]
+            output_dropout = self.dp_fea0[0]
+        elif local_model == "gcn":
+            LocalLayer = GraphConvolution
+            hidden_act = F.relu
+            hidden_dropout = self.dp_fea0[0]
+            output_dropout = 0
+        else:
+            raise ValueError(f"Unknown local_model: {local_model}")
 
         # Numpy-side data buffered as tensors.
         self.register_buffer('edge_pos_i', torch.from_numpy(np.asarray(edge_pos[:, 0]).astype('int64')))
@@ -52,27 +68,31 @@ class GCNModel(nn.Module):
                              torch.from_numpy(np.sum(mat01_tr_te[0], axis=1).astype('float32')))
         self.train_idx_size = int(np.shape(train_idx)[0])
 
-        # Build classlayers (two GCN layers).
+        # Build classlayers (two GNN layers).
         self.classlayers = nn.ModuleList()
-        self.classlayers.append(GraphConvolution(act=F.relu,
-                                                 input_dim=self.input_dim,
-                                                 output_dim=self.hidden1,
-                                                 support=None,  # set per forward
-                                                 sparse_inputs=True,
-                                                 isSparse=True,
-                                                 dropout=self.dp_fea0[0],
-                                                 num_features_nonzero=self.dp_fea0[-1],
-                                                 bias=True))
+        
+        self.classlayers.append(LocalLayer(
+            act=hidden_act,
+            input_dim=self.input_dim,
+            output_dim=self.hidden1,
+            support=None,  # set per forward
+            sparse_inputs=True,
+            isSparse=True,
+            dropout=hidden_dropout,
+            num_features_nonzero=self.dp_fea0[-1],
+            bias=True))
 
-        self.classlayers.append(GraphConvolution(act=lambda x: x,
-                                                 input_dim=self.hidden1,
-                                                 output_dim=self.num_classes,
-                                                 support=None,
-                                                 sparse_inputs=False,
-                                                 isSparse=True,
-                                                 dropout=0,
-                                                 num_features_nonzero=self.dp_fea0[-1],
-                                                 bias=True))
+        self.classlayers.append(LocalLayer(
+            act=lambda x: x,
+            input_dim=self.hidden1,
+            output_dim=self.num_classes,
+            support=None,
+            sparse_inputs=False,
+            isSparse=True,
+            dropout=output_dropout,
+            num_features_nonzero=self.dp_fea0[-1],
+            bias=True
+        ))
 
         self.p_e_yy_w_contra = MLP(act=lambda x: x,
                                    input_dim=2 * self.num_classes,
@@ -85,8 +105,8 @@ class GCNModel(nn.Module):
 
         # Forward-time results
         self.outputs = None
-        self.concat_vec_DifGCN = None
-        self.concat_vec_hgcn = None
+        self.concat_vec_local = None
+        self.concat_vec_global = None
         self.loss = torch.tensor(0.0)
         self.accuracy = torch.tensor(0.0)
         self.p_e_xy = torch.tensor(0.0)
@@ -110,23 +130,23 @@ class GCNModel(nn.Module):
         h1 = self.classlayers[1](h0)
 
         self.original_outputs = [h1]
-        self.concat_vec_DifGCN = F.normalize(h1, p=2, dim=1)
+        self.concat_vec_local = F.normalize(h1, p=2, dim=1)
 
         # HGCN forward
-        hgcn_out = self.HGCN(features)
-        self.original_outputs.append(hgcn_out)
-        self.concat_vec_hgcn = F.normalize(hgcn_out, p=2, dim=1)
+        global_out = self.global_model(features)
+        self.original_outputs.append(global_out)
+        self.concat_vec_global  = F.normalize(global_out, p=2, dim=1)
 
-        self.outputs = F.normalize(0.6 * self.concat_vec_DifGCN + 0.4 * self.concat_vec_hgcn,
+        self.outputs = F.normalize(0.6 * self.concat_vec_local + 0.4 * self.concat_vec_global,
                                    p=2, dim=1)
 
         # ---- losses ----
         loss_q_yobs_x_g = masked_softmax_cross_entropy(self.outputs, labels, mask)
 
-        y_ei_gcn = self.concat_vec_DifGCN.index_select(0, self.edge_pos_i)
-        y_ej_hgcn = self.concat_vec_hgcn.index_select(0, self.edge_pos_j)
-        y_ei_hgcn = self.concat_vec_hgcn.index_select(0, self.edge_pos_i)
-        y_ej_gcn = self.concat_vec_DifGCN.index_select(0, self.edge_pos_j)
+        y_ei_gcn = self.concat_vec_local.index_select(0, self.edge_pos_i)
+        y_ej_hgcn = self.concat_vec_global.index_select(0, self.edge_pos_j)
+        y_ei_hgcn = self.concat_vec_global.index_select(0, self.edge_pos_i)
+        y_ej_gcn = self.concat_vec_local.index_select(0, self.edge_pos_j)
 
         p_e_xy_1 = -torch.mean(
             torch.log(torch.sigmoid(
@@ -151,18 +171,18 @@ class GCNModel(nn.Module):
             total = total + self.weight_decay * 0.5 * torch.sum(var ** 2)
 
         # Add HGCN's own (weight-decay) loss.
-        total = total + self.HGCN.loss
+        total = total + self.global_model.loss
 
         self.loss = total
         self.accuracy = masked_accuracy(self.outputs, labels, mask)
         return self.outputs, self.loss, self.accuracy
 
     def _contrastive_loss(self):
-        loss = torch.tensor(0.0, device=self.concat_vec_DifGCN.device)
+        loss = torch.tensor(0.0, device=self.concat_vec_local.device)
 
-        # Eq. 4 — pairwise between concat_vec_DifGCN and concat_vec_hgcn (and reverse).
-        cos_dist = torch.exp(torch.matmul(self.concat_vec_DifGCN,
-                                          self.concat_vec_hgcn.t()) / 0.5)
+        # Eq. 4 — pairwise between concat_vec_local and concat_vec_global (and reverse).
+        cos_dist = torch.exp(torch.matmul(self.concat_vec_local,
+                                          self.concat_vec_global.t()) / 0.5)
         neg = torch.mean(cos_dist, dim=1)
         diag_cos = torch.diagonal(cos_dist, 0)
         positive_sum = diag_cos
@@ -170,8 +190,8 @@ class GCNModel(nn.Module):
 
         hp1 = 0.9
 
-        cos_dist = torch.exp(torch.matmul(self.concat_vec_hgcn,
-                                          self.concat_vec_DifGCN.t()) / 0.5)
+        cos_dist = torch.exp(torch.matmul(self.concat_vec_global,
+                                          self.concat_vec_local.t()) / 0.5)
         neg = torch.mean(cos_dist, dim=1)
         diag_cos = torch.diagonal(cos_dist, 0)
         positive_sum = diag_cos
@@ -180,8 +200,8 @@ class GCNModel(nn.Module):
         loss = loss + (-hp1 * torch.mean(torch.log(pos_neg3)))
 
         # Supervised contrastive (round 1).
-        h1 = self.concat_vec_DifGCN.index_select(0, self.train_idx)
-        h2 = self.concat_vec_hgcn.index_select(0, self.train_idx)
+        h1 = self.concat_vec_local.index_select(0, self.train_idx)
+        h2 = self.concat_vec_global.index_select(0, self.train_idx)
         h_cos = torch.exp(torch.matmul(h1, h2.t()) / 0.5)
         sup_pos = torch.sum(h_cos * self.mat01_intra, dim=1)
         sup_neg = (torch.sum(h_cos * self.mat01_inter, dim=1) + sup_pos) / (self.train_idx_size - 1)
@@ -189,8 +209,8 @@ class GCNModel(nn.Module):
         pos_neg_sup_1 = sup_pos / sup_neg
 
         # Supervised contrastive (round 2, swapped).
-        h2_b = self.concat_vec_DifGCN.index_select(0, self.train_idx)
-        h1_b = self.concat_vec_hgcn.index_select(0, self.train_idx)
+        h2_b = self.concat_vec_local.index_select(0, self.train_idx)
+        h1_b = self.concat_vec_global.index_select(0, self.train_idx)
         h_cos = torch.exp(torch.matmul(h1_b, h2_b.t()) / 0.5)
         sup_pos = torch.sum(h_cos * self.mat01_intra, dim=1)
         sup_neg = (torch.sum(h_cos * self.mat01_inter, dim=1) + sup_pos) / (self.train_idx_size - 1)

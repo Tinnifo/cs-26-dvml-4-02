@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from layers import GraphConvolution
+from layers import GraphConvolution, GraphAttention
 from metrics import masked_softmax_cross_entropy, masked_accuracy
 from config import FLAGS
 
@@ -192,3 +192,176 @@ class HGCN(Model):
 
     def predict(self):
         return F.softmax(self.outputs, dim=1)
+    
+
+class HGAT(Model):
+    def __init__(self, placeholders, input_dim, transfer_list, adj_list, node_wgt_list, **kwargs):
+        super(HGAT, self).__init__(**kwargs)
+
+        self.placeholders = placeholders
+        self.input_dim = input_dim
+        self.output_dim = placeholders['labels'].shape[1]
+
+        self.transfer_list = transfer_list
+        self.adj_list = adj_list
+        self.node_wgt_list = node_wgt_list
+
+        # -------------------------
+        # node embeddings (same as HGCN)
+        # -------------------------
+        bound = math.sqrt(6 / (3 * FLAGS.node_wgt_embed_dim + 3 * self.input_dim))
+        self.W_node_wgt = nn.Parameter(
+            torch.empty(FLAGS.max_node_wgt, FLAGS.node_wgt_embed_dim).uniform_(-bound, bound)
+        )
+
+        for i, nw in enumerate(self.node_wgt_list):
+            self.register_buffer(
+                'node_wgt_idx_' + str(i),
+                torch.from_numpy(nw.astype('int64'))
+            )
+
+        self.build()
+
+        self.inputs = placeholders['features']
+        self.outputs = None
+        self.embed = None
+        self.loss = torch.tensor(0.0)
+
+    # -------------------------------------------------
+    def _build(self):
+        FCN_hidden_list = [FLAGS.hidden] * 100
+
+        # -------------------------
+        # Input layer
+        # -------------------------
+        self.layers.append(
+            GraphAttention(
+                input_dim=self.input_dim,
+                output_dim=FCN_hidden_list[0],
+                placeholders=self.placeholders,
+                support=self.adj_list[0] * FLAGS.channel_num,
+                transfer=self.transfer_list[0],
+                mod='input',
+                layer_index=0,
+                act=F.elu,
+                dropout=True,
+                sparse_inputs=True,
+                logging=self.logging
+            )
+        )
+
+        # -------------------------
+        # Coarsen layers
+        # -------------------------
+        for i in range(FLAGS.coarsen_level - 1):
+            self.layers.append(
+                GraphAttention(
+                    input_dim=FCN_hidden_list[i],
+                    output_dim=FCN_hidden_list[i + 1],
+                    placeholders=self.placeholders,
+                    support=self.adj_list[i + 1] * FLAGS.channel_num,
+                    transfer=self.transfer_list[i + 1],
+                    mod='coarsen',
+                    layer_index=i + 1,
+                    act=F.elu,
+                    dropout=True,
+                    logging=self.logging
+                )
+            )
+
+        # -------------------------
+        # Refine layers
+        # -------------------------
+        for i in range(FLAGS.coarsen_level, FLAGS.coarsen_level * 2):
+            self.layers.append(
+                GraphAttention(
+                    input_dim=FCN_hidden_list[i - 1],
+                    output_dim=FCN_hidden_list[i],
+                    placeholders=self.placeholders,
+                    support=self.adj_list[2 * FLAGS.coarsen_level - i] * FLAGS.channel_num,
+                    transfer=self.transfer_list[2 * FLAGS.coarsen_level - 1 - i],
+                    mod='refine',
+                    layer_index=i,
+                    act=F.elu,
+                    dropout=True,
+                    logging=self.logging
+                )
+            )
+
+        # -------------------------
+        # Output layer
+        # -------------------------
+        self.layers.append(
+            GraphAttention(
+                input_dim=FCN_hidden_list[FLAGS.coarsen_level * 2 - 1],
+                output_dim=self.output_dim,
+                placeholders=self.placeholders,
+                support=self.adj_list[0] * FLAGS.channel_num,
+                transfer=self.transfer_list[0],
+                mod='output',
+                layer_index=FLAGS.coarsen_level * 2,
+                act=lambda x: x,
+                dropout=True,
+                logging=self.logging
+            )
+        )
+
+    # -------------------------------------------------
+    def _node_emb_for_layer(self, layer_idx):
+        if layer_idx == 0:
+            idx_buf = self.node_wgt_idx_0
+        elif layer_idx < FLAGS.coarsen_level:
+            idx_buf = getattr(self, 'node_wgt_idx_' + str(layer_idx))
+        elif layer_idx < FLAGS.coarsen_level * 2:
+            idx_buf = getattr(self, 'node_wgt_idx_' + str(2 * FLAGS.coarsen_level - layer_idx))
+        else:
+            return None
+
+        return self.W_node_wgt[idx_buf]
+
+    # -------------------------------------------------
+    def forward(self, features):
+        activations = [features]
+        att_layers = []
+
+        for i, layer in enumerate(self.layers):
+            mod = layer.mod
+
+            if mod in ['coarsen', 'refine']:
+                node_emb = self._node_emb_for_layer(i)
+                hidden, pre_ATT = layer(activations[-1], node_emb=node_emb)
+            else:
+                hidden, pre_ATT = layer(activations[-1])
+
+            att_layers.append(pre_ATT)
+
+            # skip connection (same as HGCN)
+            if i >= FLAGS.coarsen_level and i < FLAGS.coarsen_level * 2:
+                hidden = hidden + att_layers[FLAGS.coarsen_level * 2 - i - 1]
+
+            activations.append(hidden)
+
+        self.outputs = activations[-1]
+        self.embed = activations[-2]
+        self._loss()
+        return self.outputs
+
+    # -------------------------------------------------
+    def _loss(self):
+        loss = torch.tensor(0.0, device=self.W_node_wgt.device)
+        for layer in self.layers:
+            for var in layer.vars.values():
+                loss = loss + FLAGS.weight_decay * 0.5 * torch.sum(var ** 2)
+        self.loss = loss
+
+    # -------------------------------------------------
+    def _accuracy(self):
+        self.accuracy = masked_accuracy(
+            self.outputs,
+            self.placeholders['labels'],
+            self.placeholders['labels_mask']
+        )
+
+    def predict(self):
+        return F.softmax(self.outputs, dim=1)
+    
