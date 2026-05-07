@@ -1,10 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=cg3-grid
 #SBATCH --partition=l4
+#SBATCH --account=aau
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=15
-#SBATCH --mem=24G
-#SBATCH --time=12:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16G
+#SBATCH --time=06:00:00
 #SBATCH --output=logs/cg3_%j.out
 
 set -e
