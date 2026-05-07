@@ -12,8 +12,8 @@ set -e
 source .venv/bin/activate
 
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
-
+export CUDA_VISIBLE_DEVICES=0
 
 echo "[CG3] running combinations..."
 
-python3 src/train.py --multirun +experiment=cg3_combinations
+python3 src/train.py --multirun +experiment=cg3_combinations device=cuda
