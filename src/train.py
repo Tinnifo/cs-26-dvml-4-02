@@ -23,6 +23,7 @@ import copy
 import logging
 import os
 import sys
+import pandas as pd
 
 import hydra
 import numpy as np
@@ -94,11 +95,11 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
     optimizer = method.build_optimizer(model)
 
     best_metric = -float("inf")
-    best_state = None
+    best_state = copy.deepcopy(model.state_dict())
     counter = 0
     epoch_log = []
 
-    for epoch in range(1, cfg.epochs + 1):
+    for epoch in range(1, cfg.method.epochs + 1):
         train_out = method.train_step(model, data, optimizer, epoch)
         val_out = method.validate(model, data)
         epoch_log.append({"epoch": epoch, **train_out, **val_out})
@@ -111,8 +112,9 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
                 counter = 0
             else:
                 counter += 1
-                if counter >= cfg.patience:
-                    break
+
+            if cfg.method.use_early_stopping and counter >= cfg.patience:
+                break
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -174,6 +176,23 @@ def main(cfg: DictConfig) -> float:
             f"[seed={seed}] stopped@{result['stopped_at_epoch']} "
             f"acc={m[0]:.4f} macroF1={m[3]:.4f}"
         )
+        
+        seed_result = {
+            "seed": seed,
+            "test_acc": float(m[0]),
+            "macro_f1": float(m[3]),
+        }
+        seed_df = pd.DataFrame([seed_result])
+        seed_csv = os.path.join(log_dir, "seed_results.csv")
+
+        os.makedirs(log_dir, exist_ok=True)
+
+        seed_df.to_csv(
+            seed_csv,
+            mode="a",
+            header=not os.path.exists(seed_csv),
+            index=False,
+        )
 
         if writer is not None:
             for entry in result["epoch_log"]:
@@ -200,6 +219,45 @@ def main(cfg: DictConfig) -> float:
     moe_acc = 1.96 * std[0] / np.sqrt(n)
     moe_f1 = 1.96 * std[3] / np.sqrt(n)
 
+    # ---------------- SAVE CSV HERE ----------------
+    results_data = {
+        "model": cfg.model.name,
+        "method": cfg.method.name,
+        "dataset": cfg.dataset.name,
+        "budget": cfg.label_strategy.budget,
+
+        "mean_acc": float(mean[0]),
+        "std_acc": float(std[0]),
+        "moe_acc": float(moe_acc),
+
+        "mean_macro_f1": float(mean[3]),
+        "std_macro_f1": float(std[3]),
+        "moe_macro_f1": float(moe_f1),
+        
+        "epochs": cfg.method.epochs,
+        "use_early_stopping": cfg.method.use_early_stopping,
+        "patience": cfg.patience,
+        "seeds": str(list(cfg.seeds))
+    }
+
+    df_run = pd.DataFrame([results_data])
+
+    os.makedirs(log_dir, exist_ok=True)
+    run_csv_path = os.path.join(log_dir, "summary_results.csv")
+    df_run.to_csv(run_csv_path, index=False)
+    log.info(f"Run results saved to {run_csv_path}")
+
+    from hydra.utils import get_original_cwd
+    master_csv_path = os.path.join(get_original_cwd(), "all_experiments.csv")
+    df_run.to_csv(
+        master_csv_path,
+        mode="a",
+        header=not os.path.exists(master_csv_path),
+        index=False
+    )
+    log.info(f"Appended results to {master_csv_path}")
+    # ------------------------------------------------
+
     log.info(
         f"[summary {cfg.model.name}/{cfg.method.name} {cfg.dataset.name} "
         f"b={format_budget(cfg.label_strategy.budget)}] "
@@ -224,7 +282,7 @@ def main(cfg: DictConfig) -> float:
                 "dataset": str(cfg.dataset.name),
                 "label_strategy": str(cfg.label_strategy.name),
                 "budget": float(cfg.label_strategy.budget),
-                "epochs": int(cfg.epochs),
+                "epochs": int(cfg.method.epochs),
                 "patience": int(cfg.patience),
                 "seeds": str(list(cfg.seeds)),
             },
