@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=cg3-grid
 #SBATCH --partition=l4
-#SBATCH --gres=gpu=1
+#SBATCH --gres=gpu:l4:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=06:00:00
