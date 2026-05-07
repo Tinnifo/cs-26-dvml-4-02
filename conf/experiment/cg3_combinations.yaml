@@ -9,7 +9,6 @@
 #
 # Total = 2 × 2 × 3 × 5 = 60 jobs (× len(seeds) seeds inside each).
 
-# @package _global_
 
 defaults:
   - override /model: cg3
