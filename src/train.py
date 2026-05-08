@@ -250,7 +250,12 @@ def main(cfg: DictConfig) -> float:
 
     os.makedirs(log_dir, exist_ok=True)
     run_csv_path = os.path.join(log_dir, "summary_results.csv")
-    df_run.to_csv(run_csv_path, index=False)
+    df_run.to_csv(
+        run_csv_path,
+        mode="a",
+        header=not os.path.exists(run_csv_path),
+        index=False
+    )
     log.info(f"Run results saved to {run_csv_path}")
 
     from hydra.utils import get_original_cwd
