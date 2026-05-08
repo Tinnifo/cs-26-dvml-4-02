@@ -220,8 +220,14 @@ def main(cfg: DictConfig) -> float:
     moe_f1 = 1.96 * std[3] / np.sqrt(n)
 
     # ---------------- SAVE CSV HERE ----------------
+    model_name = cfg.model.name
+
+    # CG3 internally bundles architectures, so make model distinguishable
+    if cfg.method.name == "cg3":
+        model_name = f"{cfg.method.local_model}_{cfg.method.global_model}"
+
     results_data = {
-        "model": cfg.model.name,
+        "model": model_name,
         "method": cfg.method.name,
         "dataset": cfg.dataset.name,
         "budget": cfg.label_strategy.budget,
@@ -233,7 +239,7 @@ def main(cfg: DictConfig) -> float:
         "mean_macro_f1": float(mean[3]),
         "std_macro_f1": float(std[3]),
         "moe_macro_f1": float(moe_f1),
-        
+
         "epochs": cfg.method.epochs,
         "use_early_stopping": cfg.method.use_early_stopping,
         "patience": cfg.patience,
