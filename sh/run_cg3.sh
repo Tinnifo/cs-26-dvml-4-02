@@ -8,6 +8,9 @@
 #SBATCH --time=08:00:00
 #SBATCH --output=logs/%x-%j.out
 
+cd /workspace/cs-26-dvml-4-02 || exit 1
+mkdir -p logs
+
 source .venv/bin/activate
 
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
@@ -15,9 +18,9 @@ export CUDA_LAUNCH_BLOCKING=1
 
 python src/train.py --multirun \
 method=cg3 \
-method.local_model=gcn,gat \
+method.local_model=gcn \
 method.global_model=hgcn \
-dataset=cora,citeseer,pubmed \
-label_strategy=percentage \
-seeds=[0,1,2] \
+dataset=pubmed \
+label_strategy.budget=1,3,5,10,20 \
+method.max_node_wgt=500 \
 device=cuda
