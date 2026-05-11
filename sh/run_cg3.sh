@@ -11,7 +11,8 @@
 # 1. Move to the directory where you submitted the job
 set -euo pipefail
 
-cd $SLURM_SUBMIT_DIR || exit 1
+cd /ceph/home/student.aau.dk/ab10ix/cs-26-dvml-4-02 || exit 1
+mkdir -p logs
 
 # 2. Load necessary cluster modules (Ask your admin for the exact names)
 # module load cuda/12.1
