@@ -1,5 +1,4 @@
 #!/bin/bash
-#!/bin/bash
 #SBATCH --job-name=cg3_hgcn_sweep
 #SBATCH --partition=l4
 #SBATCH --gres=gpu:1
@@ -8,7 +7,7 @@
 #SBATCH --time=08:00:00
 #SBATCH --output=logs/%x-%j.out
 
-cd /workspace/cs-26-dvml-4-02 || exit 1
+cd $SLURM_SUBMIT_DIR || exit 1
 mkdir -p logs
 
 source .venv/bin/activate
