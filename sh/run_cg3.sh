@@ -39,8 +39,8 @@ nvidia-smi
 # Note: Added quotes around the budget list for Hydra safety
 python src/train.py --multirun \
   method=cg3 \
-  method.local_model=gcn \
-  method.global_model=hgcn \
+  method.local_model=gat \
+  method.global_model=hgat \
   dataset=pubmed \
   'label_strategy.budget=1,3,5,10,20' \
   method.max_node_wgt=500 \
