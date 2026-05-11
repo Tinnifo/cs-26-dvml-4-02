@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=cg3_pct_citeseer1
+#SBATCH --job-name=cg3_pct_pubmed1
 #SBATCH --partition=l4
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
@@ -37,4 +37,4 @@ nvidia-smi
 
 # 5. Run the job
 # Note: Added quotes around the budget list for Hydra safety
-python src/train.py --multirun +experiment=cg3_pct_citeseer
+python src/train.py --multirun +experiment=cg3_pct_pubmed
