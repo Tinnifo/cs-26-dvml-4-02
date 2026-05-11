@@ -6,10 +6,12 @@
 #SBATCH --mem=32G
 #SBATCH --time=08:00:00
 #SBATCH --output=logs/%x-%j.out
+#SBATCH --error=logs/%x-%j.err
 
 # 1. Move to the directory where you submitted the job
+set -euo pipefail
+
 cd $SLURM_SUBMIT_DIR || exit 1
-mkdir -p logs
 
 # 2. Load necessary cluster modules (Ask your admin for the exact names)
 # module load cuda/12.1
