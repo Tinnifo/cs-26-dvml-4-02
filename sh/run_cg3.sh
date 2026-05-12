@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=cg3_pctco
+#SBATCH --job-name=pubmed_fix
 #SBATCH --partition=l4
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=04:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 
@@ -37,22 +37,34 @@ nvidia-smi
 
 # 5. Run the job
 # Note: Added quotes around the budget list for Hydra safety
-# missing 1
+
+
+# gcn_hgat missing 0.001
 python src/train.py --multirun \
   method=cg3 \
   method.local_model=gcn \
   method.global_model=hgat \
-  dataset=citeseer \
+  dataset=pubmed \
   label_strategy=percentage \
-  label_strategy.budget=0.005 \
+  label_strategy.budget=0.001 \
   device=cuda
 
-# missing 2 and 3
+# gat_hgcn missing all
+python src/train.py --multirun \
+  method=cg3 \
+  method.local_model=gat \
+  method.global_model=hgcn \
+  dataset=pubmed \
+  label_strategy=percentage \
+  label_strategy.budget=0.0005,0.001,0.0015,0.002,0.0025 \
+  device=cuda
+
+# gat_hgat missing remaining
 python src/train.py --multirun \
   method=cg3 \
   method.local_model=gat \
   method.global_model=hgat \
-  dataset=citeseer \
+  dataset=pubmed \
   label_strategy=percentage \
-  label_strategy.budget=0.005,0.03 \
+  label_strategy.budget=0.0005,0.0015,0.002,0.0025 \
   device=cuda
