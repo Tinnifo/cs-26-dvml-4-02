@@ -40,22 +40,19 @@ nvidia-smi
 # missing 1
 python src/train.py --multirun \
   method=cg3 \
-  method.local_model=gat \
-  method.global_model=hgcn \
-  dataset=cora \
-  label_strategy=percentage \
-  label_strategy.budget=0.04 \
-  device=cuda
-
-# missing 2
-python src/train.py --multirun \
-  method=cg3 \
   method.local_model=gcn \
   method.global_model=hgat \
-  dataset=cora \
+  dataset=citeseer \
   label_strategy=percentage \
-  label_strategy.budget=0.04 \
+  label_strategy.budget=0.005 \
   device=cuda
 
-
-  
+# missing 2 and 3
+python src/train.py --multirun \
+  method=cg3 \
+  method.local_model=gat \
+  method.global_model=hgat \
+  dataset=citeseer \
+  label_strategy=percentage \
+  label_strategy.budget=0.005,0.03 \
+  device=cuda
