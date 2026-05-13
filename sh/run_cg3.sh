@@ -38,33 +38,12 @@ nvidia-smi
 # 5. Run the job
 # Note: Added quotes around the budget list for Hydra safety
 
-
-# gcn_hgat missing 0.001
-python src/train.py --multirun \
-  method=cg3 \
-  method.local_model=gcn \
-  method.global_model=hgat \
-  dataset=pubmed \
-  label_strategy=percentage \
-  label_strategy.budget=0.001 \
-  device=cuda
-
-# gat_hgcn missing all
-python src/train.py --multirun \
-  method=cg3 \
-  method.local_model=gat \
-  method.global_model=hgcn \
-  dataset=pubmed \
-  label_strategy=percentage \
-  label_strategy.budget=0.0005,0.001,0.0015,0.002,0.0025 \
-  device=cuda
-
-# gat_hgat missing remaining
+# gat_hgat per-class missing
 python src/train.py --multirun \
   method=cg3 \
   method.local_model=gat \
   method.global_model=hgat \
   dataset=pubmed \
-  label_strategy=percentage \
-  label_strategy.budget=0.0005,0.0015,0.002,0.0025 \
+  label_strategy=per_class \
+  label_strategy.budget=1,3,5,10,20 \
   device=cuda
