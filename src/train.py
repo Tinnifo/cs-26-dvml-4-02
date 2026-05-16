@@ -234,15 +234,22 @@ def main(cfg: DictConfig) -> float:
 
         "mean_acc": float(mean[0]),
         "std_acc": float(std[0]),
-        "moe_acc": float(moe_acc),
 
         "mean_macro_f1": float(mean[3]),
         "std_macro_f1": float(std[3]),
-        "moe_macro_f1": float(moe_f1),
 
+        # training setup
         "epochs": cfg.method.epochs,
-        "use_early_stopping": cfg.method.use_early_stopping,
         "patience": cfg.patience,
+        "lr": cfg.method.lr,
+        "weight_decay": cfg.method.weight_decay,
+
+        # model hyperparams (safe access)
+        "hidden_channels": getattr(cfg.model.arch, "hidden_channels", None),
+        "dropout": getattr(cfg.model.arch, "dropout", None),
+
+        # metadata
+        "use_early_stopping": cfg.method.use_early_stopping,
         "seeds": str(list(cfg.seeds))
     }
 

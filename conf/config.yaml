@@ -12,7 +12,7 @@ defaults:
 device: auto                  # auto | cpu | cuda
 data_root: data
 
-seeds: [0, 1, 2]
+seeds: [0, 1, 2, 3, 4]
 
 epochs: 200
 patience: 50
