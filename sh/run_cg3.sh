@@ -27,7 +27,6 @@ fi
 
 
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
-export CUDA_LAUNCH_BLOCKING=1
 
 # 4. Debug info - This will show up in your .out log
 echo "Working directory: $(pwd)"
