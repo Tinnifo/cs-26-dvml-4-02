@@ -18,7 +18,7 @@ local_model: gcn          # gcn | gat
 global_model: hgcn        # hgcn | hgat
 
 # optimization
-lr: 0.005
+lr: 0.01
 epochs: 1000
 weight_decay: 5e-4        # manual L2 term inside model loss
 optimizer_weight_decay: 0.0

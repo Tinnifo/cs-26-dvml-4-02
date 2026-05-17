@@ -79,6 +79,9 @@ def init_tensorboard(cfg: DictConfig):
 def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: int,
                  num_classes: int, seed: int, device: torch.device,
                  checkpoint_path: str | None = None):
+    import time
+    
+    
     from src.data.labels import set_seed
     set_seed(seed)
     data = base_data.clone().to(device)
@@ -93,6 +96,10 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
         except Exception as e:
             log.warning(f"torch.compile failed ({e}); falling back to eager")
     optimizer = method.build_optimizer(model)
+    
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    start_time = time.perf_counter()
 
     best_metric = -float("inf")
     best_state = copy.deepcopy(model.state_dict())
@@ -126,11 +133,40 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
             torch.save(clean_state, checkpoint_path)
 
     metrics = method.evaluate(model, data)
+    # ---- aggregate losses over training ----
+    loss_ce_vals = []
+    loss_gen_vals = []
+    loss_contrastive_vals = []
+    loss_total_vals = []
+
+    for e in epoch_log:
+        if "loss_ce" in e and e["loss_ce"] is not None:
+            loss_ce_vals.append(e["loss_ce"])
+        if "loss_gen" in e and e["loss_gen"] is not None:
+            loss_gen_vals.append(e["loss_gen"])
+        if "loss_contrastive" in e and e["loss_contrastive"] is not None:
+            loss_contrastive_vals.append(e["loss_contrastive"])
+        if "loss_total" in e and e["loss_total"] is not None:
+            loss_total_vals.append(e["loss_total"])
+    
+    loss_stats = {
+        "loss_ce": float(np.mean(loss_ce_vals)) if loss_ce_vals else None,
+        "loss_gen": float(np.mean(loss_gen_vals)) if loss_gen_vals else None,
+        "loss_contrastive": float(np.mean(loss_contrastive_vals)) if loss_contrastive_vals else None,
+        "loss_total": float(np.mean(loss_total_vals)) if loss_total_vals else None,
+    }
+    
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    runtime_sec = time.perf_counter() - start_time
+            
     return {
         "metrics": metrics,
         "epoch_log": epoch_log,
         "best_metric": best_metric,
         "stopped_at_epoch": epoch_log[-1]["epoch"] if epoch_log else 0,
+        "loss_stats": loss_stats,
+        "runtime_sec": runtime_sec,
     }
 
 
@@ -158,6 +194,8 @@ def main(cfg: DictConfig) -> float:
 
     seeds = list(cfg.seeds)
     all_metrics = []
+    all_loss_stats = []
+    all_runtimes = []
     every = max(1, int(cfg.epoch_log_every))
 
     log_dir = run_log_dir(cfg)
@@ -172,6 +210,8 @@ def main(cfg: DictConfig) -> float:
                               checkpoint_path=ckpt_path)
         m = result["metrics"]
         all_metrics.append(m)
+        all_loss_stats.append(result["loss_stats"])
+        all_runtimes.append(result["runtime_sec"])
         log.info(
             f"[seed={seed}] stopped@{result['stopped_at_epoch']} "
             f"acc={m[0]:.4f} macroF1={m[3]:.4f}"
@@ -219,6 +259,14 @@ def main(cfg: DictConfig) -> float:
     moe_acc = 1.96 * std[0] / np.sqrt(n)
     moe_f1 = 1.96 * std[3] / np.sqrt(n)
 
+    loss_ce_mean = np.mean([x["loss_ce"] for x in all_loss_stats if x["loss_ce"] is not None])
+    loss_gen_mean = np.mean([x["loss_gen"] for x in all_loss_stats if x["loss_gen"] is not None])
+    loss_contrastive_mean = np.mean([x["loss_contrastive"] for x in all_loss_stats if x["loss_contrastive"] is not None])
+    loss_total_mean = np.mean([x["loss_total"] for x in all_loss_stats if x["loss_total"] is not None])
+
+    runtime_mean = float(np.mean(all_runtimes))
+    runtime_std = float(np.std(all_runtimes))
+    
     # ---------------- SAVE CSV HERE ----------------
     model_name = cfg.model.name
 
@@ -247,7 +295,17 @@ def main(cfg: DictConfig) -> float:
         # model hyperparams (safe access)
         "hidden_channels": getattr(cfg.model.arch, "hidden_channels", None),
         "dropout": getattr(cfg.model.arch, "dropout", None),
-
+        
+         # losses
+        "loss_ce": float(loss_ce_mean),
+        "loss_gen": float(loss_gen_mean),
+        "loss_contrastive": float(loss_contrastive_mean),
+        "loss_total": float(loss_total_mean),
+        
+        # runtime
+        "runtime_sec_mean": runtime_mean,
+        "runtime_sec_std": runtime_std,
+        
         # metadata
         "use_early_stopping": cfg.method.use_early_stopping,
         "seeds": str(list(cfg.seeds))
@@ -267,6 +325,7 @@ def main(cfg: DictConfig) -> float:
 
     from hydra.utils import get_original_cwd
     master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselines.csv")
+    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3.csv")
     df_run.to_csv(
         master_csv_path,
         mode="a",

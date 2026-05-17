@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=pubmed_fix
+#SBATCH --job-name=cg3perclass
 #SBATCH --partition=l4
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
@@ -38,11 +38,4 @@ nvidia-smi
 # 5. Run the job
 # Note: Added quotes around the budget list for Hydra safety
 
-python src/train.py \
-  method=cg3 \
-  method.local_model=gat \
-  method.global_model=hgat \
-  dataset=cora \
-  label_strategy=percentage \
-  label_strategy.budget=0.04 \
-  device=cuda
+python src/train.py --multirun +experiment=cg3_combinations device=cuda

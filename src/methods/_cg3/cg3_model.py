@@ -186,8 +186,17 @@ class GNNModel(nn.Module):
         ).clamp(min=1e-8)))
         self.p_e_xy = p_e_xy_1 + p_e_xy_2
 
-        total = loss_q_yobs_x_g + 0.4 * self.p_e_xy
-        total = total + self._contrastive_loss()
+        # --- individual losses --- 
+        loss_ce = loss_q_yobs_x_g
+        loss_gen = self.p_e_xy
+        loss_contrastive = self._contrastive_loss()
+        
+        
+        total = (
+            loss_ce
+            + 0.4 * loss_gen
+            + loss_contrastive
+        )
 
         # Manual L2 on classlayer + p_e_yy_w_contra weights — matches snapshot.
         for i in range(2):
@@ -201,6 +210,12 @@ class GNNModel(nn.Module):
 
         self.loss = total
         self.accuracy = masked_accuracy(self.outputs, labels, mask)
+        
+        self.loss_ce = loss_ce.detach()
+        self.loss_gen = loss_gen.detach()
+        self.loss_contrastive = loss_contrastive.detach()
+        self.loss_total = total.detach()
+
         return self.outputs, self.loss, self.accuracy
 
     def _contrastive_loss(self) -> torch.Tensor:

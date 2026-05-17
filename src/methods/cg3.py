@@ -29,6 +29,7 @@ import torch.nn.functional as F
 from src.methods.base import BaseMethod
 
 
+
 class CG3Method(BaseMethod):
     def __init__(self, cfg):
         super().__init__(cfg)
@@ -135,9 +136,23 @@ class CG3Method(BaseMethod):
         )
         loss.backward()
         optimizer.step()
+
+        # --- detach everything once (clean logging) ---
+        train_loss = loss.detach()
+
+        loss_ce = getattr(model, "loss_ce", None)
+        loss_gen = getattr(model, "loss_gen", None)
+        loss_contrastive = getattr(model, "loss_contrastive", None)
+        loss_total = getattr(model, "loss_total", loss)
+
         return {
-            "train_loss": float(loss.detach().item()),
+            "train_loss": float(train_loss.item()),
             "train_acc": float(accuracy.detach().item()),
+
+            "loss_ce": float(loss_ce.detach().item()) if loss_ce is not None else None,
+            "loss_gen": float(loss_gen.detach().item()) if loss_gen is not None else None,
+            "loss_contrastive": float(loss_contrastive.detach().item()) if loss_contrastive is not None else None,
+            "loss_total": float(loss_total.detach().item()),
         }
 
     def predict_logits(self, model: torch.nn.Module, data) -> torch.Tensor:
