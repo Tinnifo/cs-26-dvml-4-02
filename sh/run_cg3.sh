@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=cg3perclass
+#SBATCH --job-name=cg3pct
 #SBATCH --partition=l4
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
@@ -7,6 +7,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
+#SBATCH --array=0-2
 
 # 1. Move to the directory where you submitted the job
 set -euo pipefail
@@ -33,8 +34,10 @@ echo "Working directory: $(pwd)"
 echo "Using python: $(which python)"
 nvidia-smi
 
+DATASETS=(cora citeseer pubmed)
+DATASET=${DATASETS[$SLURM_ARRAY_TASK_ID]}
 
 # 5. Run the job
 # Note: Added quotes around the budget list for Hydra safety
 
-python src/train.py --multirun +experiment=cg3_combinations device=cuda
+python src/train.py --multirun +experiment=cg3_pct_${DATASET} device=cuda

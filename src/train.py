@@ -325,7 +325,9 @@ def main(cfg: DictConfig) -> float:
 
     from hydra.utils import get_original_cwd
     #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselines.csv")
-    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3.csv")
+    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3.csv")
+    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3Percentage.csv")
+
     df_run.to_csv(
         master_csv_path,
         mode="a",

@@ -1,13 +1,4 @@
 # @package _global_
-#
-# Sweep all four CG3 (local × global) combinations from snapshot/86b0818
-# (CG3Method/main.py): {gcn, gat} × {hgcn, hgat}, across the three Planetoid
-# datasets and the per-class budget grid used in `full_grid.yaml`.
-#
-# Run with:
-#   python src/train.py --multirun +experiment=cg3_combinations
-#
-# Total = 2 × 2 × 3 × 5 = 60 jobs (× len(seeds) seeds inside each).
 
 
 defaults:
