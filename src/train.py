@@ -280,13 +280,23 @@ def main(cfg: DictConfig) -> float:
         "dataset": cfg.dataset.name,
         "budget": cfg.label_strategy.budget,
 
-        "mean_acc": float(mean[0]),
-        "std_acc": float(std[0]),
+        "mean_acc": round(float(mean[0]), 4),
+        "std_acc": round(float(std[0]), 4),
 
-        "mean_macro_f1": float(mean[3]),
-        "std_macro_f1": float(std[3]),
-
-        # training setup
+         "mean_macro_f1": round(float(mean[3]), 4),
+         "std_macro_f1": round(float(std[3]), 4),
+        
+         # losses
+        "l_ce": round(float(loss_ce_mean), 4),
+        "l_gen": round(float(loss_gen_mean), 4),
+        "l_con": round(float(loss_contrastive_mean), 4),
+        "l_total": round(float(loss_total_mean), 4),
+        
+        # runtime
+        "rt_sec_mean": round(runtime_mean, 4),
+        "rt_sec_std": round(runtime_std, 4),
+        
+         # training setup
         "epochs": cfg.method.epochs,
         "patience": cfg.patience,
         "lr": cfg.method.lr,
@@ -295,16 +305,6 @@ def main(cfg: DictConfig) -> float:
         # model hyperparams (safe access)
         "hidden_channels": getattr(cfg.model.arch, "hidden_channels", None),
         "dropout": getattr(cfg.model.arch, "dropout", None),
-        
-         # losses
-        "loss_ce": float(loss_ce_mean),
-        "loss_gen": float(loss_gen_mean),
-        "loss_contrastive": float(loss_contrastive_mean),
-        "loss_total": float(loss_total_mean),
-        
-        # runtime
-        "runtime_sec_mean": runtime_mean,
-        "runtime_sec_std": runtime_std,
         
         # metadata
         "use_early_stopping": cfg.method.use_early_stopping,
@@ -326,7 +326,8 @@ def main(cfg: DictConfig) -> float:
     from hydra.utils import get_original_cwd
     #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselines.csv")
     #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3.csv")
-    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3Percentage.csv")
+    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3Percentage.csv")
+    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsPerClass.csv")
 
     df_run.to_csv(
         master_csv_path,
