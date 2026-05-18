@@ -324,10 +324,11 @@ def main(cfg: DictConfig) -> float:
     log.info(f"Run results saved to {run_csv_path}")
 
     from hydra.utils import get_original_cwd
-    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselines.csv")
-    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3.csv")
-    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3Percentage.csv")
-    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsPerClass.csv")
+    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselines.csv")    
+    
+    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsPerClass.csv")
+    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3PercentageBudget.csv")
+
 
     df_run.to_csv(
         master_csv_path,
