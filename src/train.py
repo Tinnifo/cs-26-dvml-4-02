@@ -103,6 +103,7 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
 
     best_metric = -float("inf")
     best_state = copy.deepcopy(model.state_dict())
+    best_epoch = -1   
     counter = 0
     epoch_log = []
 
@@ -115,6 +116,7 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
         if early is not None:
             if early > best_metric:
                 best_metric = float(early)
+                best_epoch = epoch   
                 best_state = copy.deepcopy(model.state_dict())
                 counter = 0
             else:
@@ -164,6 +166,7 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
         "metrics": metrics,
         "epoch_log": epoch_log,
         "best_metric": best_metric,
+        "best_epoch": best_epoch,   
         "stopped_at_epoch": epoch_log[-1]["epoch"] if epoch_log else 0,
         "loss_stats": loss_stats,
         "runtime_sec": runtime_sec,
@@ -196,6 +199,7 @@ def main(cfg: DictConfig) -> float:
     all_metrics = []
     all_loss_stats = []
     all_runtimes = []
+    best_epochs = []
     every = max(1, int(cfg.epoch_log_every))
 
     log_dir = run_log_dir(cfg)
@@ -212,8 +216,10 @@ def main(cfg: DictConfig) -> float:
         all_metrics.append(m)
         all_loss_stats.append(result["loss_stats"])
         all_runtimes.append(result["runtime_sec"])
+        best_epochs.append(result["best_epoch"])
         log.info(
             f"[seed={seed}] stopped@{result['stopped_at_epoch']} "
+            f"best@{result['best_epoch']} "
             f"acc={m[0]:.4f} macroF1={m[3]:.4f}"
         )
         
@@ -287,18 +293,19 @@ def main(cfg: DictConfig) -> float:
         "std_macro_f1": round(float(std[3]), 4),
         
          # losses
-        #"l_ce": round(float(loss_ce_mean), 4),
-        #"l_gen": round(float(loss_gen_mean), 4),
-        #"l_con": round(float(loss_contrastive_mean), 4),
-        #"l_total": round(float(loss_total_mean), 4),
+        "l_ce": round(float(loss_ce_mean), 4),
+        "l_gen": round(float(loss_gen_mean), 4),
+        "l_con": round(float(loss_contrastive_mean), 4),
+        "l_total": round(float(loss_total_mean), 4),
         
-        # runtime
+        # runtime + epoch
         "rt_sec_mean": round(runtime_mean, 4),
+        "best_epoch_mean": int(np.mean(best_epochs)) if best_epochs else None,
         "rt_sec_std": round(runtime_std, 4),
 
         # model hyperparams (safe access)
-        "hidden_channels": getattr(cfg.model.arch, "hidden_channels", None),
-        "dropout": getattr(cfg.model.arch, "dropout", None),
+        #"hidden_channels": getattr(cfg.model.arch, "hidden_channels", None),
+        #"dropout": getattr(cfg.model.arch, "dropout", None),
         
          # training setup
         "epochs": cfg.method.epochs,
@@ -325,12 +332,12 @@ def main(cfg: DictConfig) -> float:
 
     from hydra.utils import get_original_cwd
     
-    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsPerClass.csv")
-    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3Percentage.csv")
     
     #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselinesPC.csv")    
-    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselinesPB.csv")    
+    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselinesPB.csv")    
 
+    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3Percentage.csv")
+    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsPerClass.csv")
 
 
     df_run.to_csv(
