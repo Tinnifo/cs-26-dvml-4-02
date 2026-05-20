@@ -1,3 +1,6 @@
 name: vanilla
 lr: 0.01
 weight_decay: 5e-4
+epochs: 200
+patience: 50
+use_early_stopping: true

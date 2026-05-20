@@ -4,3 +4,6 @@ weight_decay: 5e-4
 lamda: 1.0
 warmup: 0
 beta: 0.0
+epochs: 200
+patience: 50
+use_early_stopping: true

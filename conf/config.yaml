@@ -14,8 +14,7 @@ data_root: data
 
 seeds: [0, 1, 2, 3, 4]
 
-epochs: 200
-patience: 50
+
 epoch_log_every: 10
 
 save_checkpoints: true        # writes best_state_seed{seed}.pt next to the TB events

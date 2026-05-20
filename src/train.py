@@ -122,7 +122,7 @@ def run_one_seed(cfg: DictConfig, method: BaseMethod, base_data, in_channels: in
             else:
                 counter += 1
 
-            if cfg.method.use_early_stopping and counter >= cfg.patience:
+            if cfg.method.use_early_stopping and counter >= cfg.method.patience:
                 break
 
     if best_state is not None:
@@ -292,12 +292,11 @@ def main(cfg: DictConfig) -> float:
         "mean_macro_f1": round(float(mean[3]), 4),
         "std_macro_f1": round(float(std[3]), 4),
         
-        "model": model_name,        
-         # losses
-        "l_ce": round(float(loss_ce_mean), 4),
-        "l_gen": round(float(loss_gen_mean), 4),
-        "l_con": round(float(loss_contrastive_mean), 4),
-        "l_total": round(float(loss_total_mean), 4),
+        # losses
+        #"l_ce": round(float(loss_ce_mean), 4),
+        #"l_gen": round(float(loss_gen_mean), 4),
+        #"l_con": round(float(loss_contrastive_mean), 4),
+        #"l_total": round(float(loss_total_mean), 4),
         
         # runtime + epoch
         "rt_sec_mean": round(runtime_mean, 4),
@@ -305,12 +304,12 @@ def main(cfg: DictConfig) -> float:
         "rt_sec_std": round(runtime_std, 4),
 
         # model hyperparams (safe access)
-        #"hidden_channels": getattr(cfg.model.arch, "hidden_channels", None),
-        #"dropout": getattr(cfg.model.arch, "dropout", None),
+        "hidden_channels": getattr(cfg.model.arch, "hidden_channels", None),
+        "dropout": getattr(cfg.model.arch, "dropout", None),
         
          # training setup
         "epochs": cfg.method.epochs,
-        "patience": cfg.patience,
+        "patience": cfg.method.patience,
         "lr": cfg.method.lr,
         "weight_decay": cfg.method.weight_decay,
         
@@ -334,11 +333,11 @@ def main(cfg: DictConfig) -> float:
     from hydra.utils import get_original_cwd
     
     
-    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselinesPC.csv")    
+    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselinesPC.csv")    
     #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselinesPB.csv")    
 
     #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsPerClass.csv")
-    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3Percentage.csv")
+    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3Percentage.csv")
 
 
     df_run.to_csv(
@@ -375,7 +374,7 @@ def main(cfg: DictConfig) -> float:
                 "label_strategy": str(cfg.label_strategy.name),
                 "budget": float(cfg.label_strategy.budget),
                 "epochs": int(cfg.method.epochs),
-                "patience": int(cfg.patience),
+                "patience": int(cfg.method.patience),
                 "seeds": str(list(cfg.seeds)),
             },
             {
