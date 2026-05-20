@@ -45,7 +45,7 @@ DATASET=${DATASETS[$SLURM_ARRAY_TASK_ID]}
 echo "Running dataset: $DATASET"
 
 python3 src/train.py --multirun \
-    model=gin,sage,gt \
+    model=gcn,gat,gin,sage,gt \
     method=vanilla,iceberg \
     dataset=$DATASET \
     label_strategy=per_class \
