@@ -34,7 +34,7 @@ echo "Working directory: $(pwd)"
 echo "Using python: $(which python)"
 nvidia-smi
 
-DATASETS=(cora citeseer pubmed)
+DATASETS=(cora citeseer pubmed pubmed2)
 DATASET=${DATASETS[$SLURM_ARRAY_TASK_ID]}
 
 # 5. Run the job

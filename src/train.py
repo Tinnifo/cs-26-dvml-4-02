@@ -292,6 +292,7 @@ def main(cfg: DictConfig) -> float:
         "mean_macro_f1": round(float(mean[3]), 4),
         "std_macro_f1": round(float(std[3]), 4),
         
+        "model": model_name,        
          # losses
         "l_ce": round(float(loss_ce_mean), 4),
         "l_gen": round(float(loss_gen_mean), 4),
@@ -336,8 +337,8 @@ def main(cfg: DictConfig) -> float:
     #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselinesPC.csv")    
     #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselinesPB.csv")    
 
-    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3Percentage.csv")
-    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsPerClass.csv")
+    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsPerClass.csv")
+    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3Percentage.csv")
 
 
     df_run.to_csv(
