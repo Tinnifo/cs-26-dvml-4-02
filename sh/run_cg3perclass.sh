@@ -4,10 +4,10 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=12:00:00
+#SBATCH --time=7:00:00
 #SBATCH --output=logs/%x-%A_%a.out
 #SBATCH --error=logs/%x-%A_%a.err
-#SBATCH --array=0-2
+#SBATCH --array=0-1
 
 
 # 1. Move to the directory where you submitted the job
@@ -30,23 +30,19 @@ fi
 
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 
-EXPERIMENTS=(
-    "cg3_perclass_cora"
-    "cg3_perclass_citeseer"
-    "cg3_perclass_pubmed"
-)
-
-EXP_NAME=${EXPERIMENTS[$SLURM_ARRAY_TASK_ID]}
-
-echo "Running $EXP_NAME"
 
 # 4. Debug info - This will show up in your .out log
 echo "Working directory: $(pwd)"
 echo "Using python: $(which python)"
 nvidia-smi
 
+MODELS=("hgcn" "hgat")
+MODEL=${MODELS[$SLURM_ARRAY_TASK_ID]}
 
 # 5. Run the job
 # Note: Added quotes around the budget list for Hydra safety
 
-python src/train.py --multirun +experiment=$EXP_NAME device=cuda
+python src/train.py --multirun \
+    +experiment=cg3_perclass_pubmed \
+    method.global_model=$MODEL \
+    device=cuda
