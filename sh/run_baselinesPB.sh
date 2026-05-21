@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=12:00:00
+#SBATCH --time=2:00:00
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 #SBATCH --array=0-2
@@ -54,7 +54,7 @@ elif [ "$DATASET" = "pubmed" ]; then
 fi
 
 python3 src/train.py --multirun \
-    model=gin,sage,gt \
+    model=gcn,gat,gin,sage,gt,diff \
     method=vanilla,iceberg \
     dataset=$DATASET \
     label_strategy=percentage \
