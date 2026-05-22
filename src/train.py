@@ -293,10 +293,10 @@ def main(cfg: DictConfig) -> float:
         "std_macro_f1": round(float(std[3]), 4),
         
         # losses
-        #"l_ce": round(float(loss_ce_mean), 4),
-        #"l_gen": round(float(loss_gen_mean), 4),
-        #"l_con": round(float(loss_contrastive_mean), 4),
-        #"l_total": round(float(loss_total_mean), 4),
+        "l_ce": round(float(loss_ce_mean), 4),
+        "l_gen": round(float(loss_gen_mean), 4),
+        "l_con": round(float(loss_contrastive_mean), 4),
+        "l_total": round(float(loss_total_mean), 4),
         
         # runtime + epoch
         "rt_sec_mean": round(runtime_mean, 4),
@@ -304,8 +304,8 @@ def main(cfg: DictConfig) -> float:
         "rt_sec_std": round(runtime_std, 4),
 
         # model hyperparams (safe access)
-        "hidden_channels": getattr(cfg.model.arch, "hidden_channels", None),
-        "dropout": getattr(cfg.model.arch, "dropout", None),
+        #"hidden_channels": getattr(cfg.model.arch, "hidden_channels", None),
+        #"dropout": getattr(cfg.model.arch, "dropout", None),
         
          # training setup
         "epochs": cfg.method.epochs,
@@ -333,10 +333,10 @@ def main(cfg: DictConfig) -> float:
     from hydra.utils import get_original_cwd
     
     
-    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselinesPC.csv")    
+    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselinesPC.csv")    
     #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsBaselinesPB.csv")    
 
-    #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsPerClass.csv")
+    master_csv_path = os.path.join(get_original_cwd(), "all_experimentsPerClass.csv")
     #master_csv_path = os.path.join(get_original_cwd(), "all_experimentsCG3Percentage.csv")
 
 
