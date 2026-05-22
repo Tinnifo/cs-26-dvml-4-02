@@ -11,23 +11,39 @@
 set -euo pipefail
 
 # ------------------------------------------------------------
-# ALWAYS run from submission directory (VERY IMPORTANT FIX)
+# ALWAYS go to submission directory
 # ------------------------------------------------------------
 cd "$SLURM_SUBMIT_DIR" || exit 1
 
-mkdir -p logs
-
-echo "Working directory: $(pwd)"
-echo "SLURM submit dir: $SLURM_SUBMIT_DIR"
+echo "SLURM_SUBMIT_DIR: $SLURM_SUBMIT_DIR"
+echo "Current dir: $(pwd)"
 
 # ------------------------------------------------------------
-# Activate environment (safe version)
+# If submitted from subfolder (e.g. sh/), jump to repo root
+# ------------------------------------------------------------
+if [ ! -f "src/train.py" ]; then
+    echo "src/train.py not found here, moving to repo root..."
+
+    cd "$(dirname "$SLURM_SUBMIT_DIR")" || exit 1
+fi
+
+# final safety check
+if [ ! -f "src/train.py" ]; then
+    echo "ERROR: cannot find src/train.py"
+    echo "Current dir: $(pwd)"
+    ls -la
+    exit 1
+fi
+
+mkdir -p logs
+
+# ------------------------------------------------------------
+# Activate environment
 # ------------------------------------------------------------
 if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 else
-    echo "ERROR: .venv not found in $(pwd)"
-    echo "Contents:"
+    echo "ERROR: .venv not found"
     ls -la
     exit 1
 fi
@@ -35,7 +51,7 @@ fi
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 
 # ------------------------------------------------------------
-# Debug info
+# Debug
 # ------------------------------------------------------------
 echo "Using python: $(which python)"
 nvidia-smi
