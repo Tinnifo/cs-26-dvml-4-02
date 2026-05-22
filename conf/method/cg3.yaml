@@ -38,4 +38,4 @@ node_wgt_embed_dim: 5
 # training
 use_early_stopping: false
 select_best_by: val_acc
-
+patience: 9999
