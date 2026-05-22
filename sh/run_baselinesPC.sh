@@ -8,41 +8,41 @@
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 
-
-# ============================================================
-# 1. PER-CLASS BUDGETS
-# ============================================================
-
-# 1. Move to the directory where you submitted the job
 set -euo pipefail
 
-cd /ceph/home/student.aau.dk/ab10ix/cs-26-dvml-4-02 || exit 1
+# ------------------------------------------------------------
+# ALWAYS run from submission directory (VERY IMPORTANT FIX)
+# ------------------------------------------------------------
+cd "$SLURM_SUBMIT_DIR" || exit 1
+
 mkdir -p logs
 
-# 2. Load necessary cluster modules (Ask your admin for the exact names)
-# module load cuda/12.1
+echo "Working directory: $(pwd)"
+echo "SLURM submit dir: $SLURM_SUBMIT_DIR"
 
-# 3. Activate environment
-if [ -d ".venv" ]; then
+# ------------------------------------------------------------
+# Activate environment (safe version)
+# ------------------------------------------------------------
+if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 else
-    echo "Error: .venv not found in $(pwd)"
+    echo "ERROR: .venv not found in $(pwd)"
+    echo "Contents:"
+    ls -la
     exit 1
 fi
 
-
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 
-# 4. Debug info - This will show up in your .out log
-echo "Working directory: $(pwd)"
+# ------------------------------------------------------------
+# Debug info
+# ------------------------------------------------------------
 echo "Using python: $(which python)"
 nvidia-smi
 
-#DATASETS=(cora citeseer pubmed)
-#DATASET=${DATASETS[$SLURM_ARRAY_TASK_ID]}
-
-echo "Running dataset: $DATASET"
-
+# ------------------------------------------------------------
+# Run experiment
+# ------------------------------------------------------------
 python3 src/train.py --multirun \
     model=gin \
     method=iceberg \
@@ -50,6 +50,3 @@ python3 src/train.py --multirun \
     label_strategy=per_class \
     label_strategy.budget=1,20 \
     device=cuda
-
-#echo "Done: $DATASET"
-
