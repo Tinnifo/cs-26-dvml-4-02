@@ -159,3 +159,5 @@ runs/
 
 # OS
 .DS_Store
+.wiki
+CLAUDE.local.md
